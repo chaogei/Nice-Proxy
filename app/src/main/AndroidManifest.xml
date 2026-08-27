@@ -1,0 +1,92 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <!-- 扫码导入。设为非必需，没有摄像头的设备（如电视盒子）仍可从相册选图 -->
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-feature
+        android:name="android.hardware.camera"
+        android:required="false" />
+
+    <!--
+        没有它，Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS 会在运行时抛
+        SecurityException，只能退化成「打开列表让用户自己找」，而多数人找不到。
+        代理网关被打盹冻结 = 局域网里所有客户端一起断网，所以这一档值得留。
+
+        取舍：Google Play 只允许闹钟、VoIP 等少数类别声明该权限。本应用经
+        GitHub Release / F-Droid 分发，不受该政策约束。若哪天要上架 Play，
+        删掉这一行并同步去掉 KeepAlive 里的第一档即可，其余回退路径不受影响。
+    -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+
+    <!--
+        Android 11 起的包可见性过滤会让 resolveActivity / getLaunchIntentForPackage
+        对未声明的包返回空，startActivity 也会直接抛 ActivityNotFoundException。
+        不列出这些厂商管家，KeepAlive 的自启动深链会「静默」地全部落到应用详情页。
+        逐个列包名而不是用 QUERY_ALL_PACKAGES：后者是敏感权限，而这里并不需要。
+        本列表与 KeepAlive.kt 的 VENDORS 表一一对应，改一处要同步改另一处。
+    -->
+    <queries>
+        <package android:name="com.miui.securitycenter" />
+        <package android:name="com.huawei.systemmanager" />
+        <package android:name="com.hihonor.systemmanager" />
+        <package android:name="com.coloros.safecenter" />
+        <package android:name="com.coloros.oppoguardelf" />
+        <package android:name="com.oppo.safe" />
+        <package android:name="com.oneplus.security" />
+        <package android:name="com.vivo.permissionmanager" />
+        <package android:name="com.iqoo.secure" />
+        <package android:name="com.meizu.safe" />
+        <package android:name="com.samsung.android.lool" />
+        <package android:name="com.samsung.android.sm" />
+        <package android:name="com.samsung.android.sm_cn" />
+        <package android:name="com.lenovo.security" />
+        <package android:name="com.gionee.softmanager" />
+        <package android:name="com.yulong.android.coolsafe" />
+        <package android:name="com.yulong.android.security" />
+        <package android:name="com.letv.android.letvsafe" />
+        <package android:name="com.zte.heartyservice" />
+        <package android:name="com.asus.mobilemanager" />
+    </queries>
+
+    <application
+        android:name=".NiceProxyApplication"
+        android:allowBackup="false"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:networkSecurityConfig="@xml/network_security_config"
+        android:roundIcon="@mipmap/ic_launcher"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.NiceProxy">
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:launchMode="singleTop"
+            android:theme="@style/Theme.NiceProxy"
+            android:windowSoftInputMode="adjustResize">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!--
+            Worker 需要注入 Repository，必须用 Hilt 的 WorkerFactory。
+            移除 WorkManager 的默认初始化器，改由 Application 的
+            Configuration.Provider 提供配置，否则注入不会生效。
+        -->
+        <provider
+            android:name="androidx.startup.InitializationProvider"
+            android:authorities="${applicationId}.androidx-startup"
+            android:exported="false"
+            tools:node="merge">
+            <meta-data
+                android:name="androidx.work.WorkManagerInitializer"
+                android:value="androidx.startup"
+                tools:node="remove" />
+        </provider>
+
+    </application>
+
+</manifest>

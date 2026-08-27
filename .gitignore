@@ -1,0 +1,20 @@
+*.iml
+.gradle/
+.kotlin/
+local.properties
+.idea/
+.DS_Store
+build/
+captures/
+.externalNativeBuild
+.cxx
+*.apk
+*.aab
+*.keystore
+!debug.keystore
+keystore.properties
+
+# gomobile 产物（由 native/libnice/build.ps1 生成）
+libs/*.aar
+libs/*-sources.jar
+native/libnice/*.aar

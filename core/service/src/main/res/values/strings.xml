@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="service_notification_channel_name">代理服务</string>
+    <string name="service_notification_channel_description">显示代理服务的运行状态与实时速率</string>
+
+    <string name="service_state_starting">正在启动…</string>
+    <string name="service_state_stopping">正在停止…</string>
+    <string name="service_state_running">运行中</string>
+    <string name="service_state_failed">启动失败</string>
+
+    <string name="app_tile_label">Nice Proxy</string>
+    <string name="service_notification_stop">停止</string>
+    <string name="service_ports_prefix">端口 %1$s</string>
+    <string name="service_speed_format">↑ %1$s  ↓ %2$s</string>
+    <string name="service_retry_pending">%1$s · %2$d 秒后重试</string>
+</resources>

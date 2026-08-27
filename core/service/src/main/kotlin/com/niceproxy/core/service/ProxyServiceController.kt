@@ -1,0 +1,103 @@
+package com.niceproxy.core.service
+
+import android.content.Context
+import android.content.Intent
+import androidx.core.content.ContextCompat
+import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import javax.inject.Inject
+import javax.inject.Singleton
+
+/**
+ * UI 与代理服务之间的唯一接口。
+ *
+ * 界面只观察这里的 StateFlow、只调用这里的 start/stop，从不直接 bind 到
+ * [ProxyService]。这样 Service 的生命周期（可能被系统回收重建）不会渗透到
+ * ViewModel 层，状态也不会因为 Service 重建而丢失。
+ */
+@Singleton
+class ProxyServiceController @Inject constructor(
+    @ApplicationContext private val context: Context,
+) {
+
+    private val _state = MutableStateFlow<ProxyState>(ProxyState.Stopped)
+    val state: StateFlow<ProxyState> = _state.asStateFlow()
+
+    private val _traffic = MutableStateFlow(TrafficSnapshot())
+    val traffic: StateFlow<TrafficSnapshot> = _traffic.asStateFlow()
+
+    private val _configOutdated = MutableStateFlow(false)
+
+    /**
+     * 内核正在跑的那份配置已经和当前设置对不上了，需要重新应用才会生效。
+     *
+     * 不自动重启是刻意的：内核重启意味着所有客户端连接一起断开，而用户改配置往往是
+     * 连着改好几处。UI 应当在这里为 true 时给出 Snackbar「配置已变更，点击应用」，
+     * 点击时调用 [reapplyConfig]。见 docs/DESIGN.md §8.2。
+     *
+     * 仅切换节点不会让它变 true —— 那条路径走 Clash API 热切换，无需重启（§6.3）。
+     */
+    val configOutdated: StateFlow<Boolean> = _configOutdated.asStateFlow()
+
+    private val _configMessage = MutableStateFlow<String?>(null)
+
+    /**
+     * 应用配置没能成功的原因（例如新配置本身不合法）。
+     * 这种情况下旧配置会继续运行，UI 展示后调用 [consumeConfigMessage] 清除。
+     */
+    val configMessage: StateFlow<String?> = _configMessage.asStateFlow()
+
+    fun start() {
+        ContextCompat.startForegroundService(
+            context,
+            Intent(context, ProxyService::class.java).setAction(ProxyService.ACTION_START),
+        )
+    }
+
+    fun stop() {
+        context.startService(
+            Intent(context, ProxyService::class.java).setAction(ProxyService.ACTION_STOP),
+        )
+    }
+
+    fun toggle() {
+        if (_state.value.isActive) stop() else start()
+    }
+
+    /**
+     * 把最新配置应用到运行中的内核。
+     *
+     * 服务端会先比对指纹：没变就直接返回，不会为一次「其实没改到内核」的保存
+     * 白白重启一遍、断掉所有客户端连接。见 docs/DESIGN.md §6.3。
+     */
+    fun reapplyConfig() {
+        // 没在跑就没有「重新应用」可言，此时也不该从后台把服务拉起来
+        if (!_state.value.isActive) return
+        context.startService(
+            Intent(context, ProxyService::class.java).setAction(ProxyService.ACTION_RELOAD),
+        )
+    }
+
+    fun consumeConfigMessage() {
+        _configMessage.value = null
+    }
+
+    /** 仅供 [ProxyService] 回写状态。 */
+    internal fun updateState(state: ProxyState) {
+        _state.value = state
+    }
+
+    internal fun updateTraffic(snapshot: TrafficSnapshot) {
+        _traffic.value = snapshot
+    }
+
+    internal fun updateConfigOutdated(outdated: Boolean) {
+        _configOutdated.value = outdated
+    }
+
+    internal fun postConfigMessage(text: String) {
+        _configMessage.value = text
+    }
+}

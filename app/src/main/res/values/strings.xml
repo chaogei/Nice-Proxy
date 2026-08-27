@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Nice Proxy</string>
+
+    <string name="home_title">Nice Proxy</string>
+    <string name="home_start">启动代理</string>
+    <string name="home_stop">停止代理</string>
+    <string name="home_state_stopped">已停止</string>
+    <string name="home_state_starting">正在启动…</string>
+    <string name="home_state_running">运行中</string>
+    <string name="home_state_stopping">正在停止…</string>
+    <string name="home_state_failed">启动失败</string>
+
+    <string name="home_addresses_title">在其他设备上填写</string>
+    <string name="home_addresses_empty">未找到可用的网络接口，请连接 Wi-Fi 或开启热点</string>
+    <string name="home_addresses_hint">把下面任意一个地址填进电脑或游戏机的代理设置里</string>
+    <string name="home_copy">复制</string>
+    <string name="home_copied">已复制到剪贴板</string>
+
+    <string name="home_inbounds_title">入站服务</string>
+    <string name="home_inbound_add">添加入站</string>
+    <string name="home_no_auth_warning">未启用认证：同一网络下的任何设备都能使用这个代理</string>
+    <string name="home_vpn_active_warning">检测到其他 VPN 正在运行，出站流量会被它接管</string>
+
+    <string name="home_traffic_upload">上传</string>
+    <string name="home_traffic_download">下载</string>
+
+    <string name="inbound_edit_title">编辑入站</string>
+    <string name="inbound_new_title">新建入站</string>
+    <string name="inbound_type">类型</string>
+    <string name="inbound_listen">监听地址</string>
+    <string name="inbound_listen_all">所有接口（0.0.0.0）</string>
+    <string name="inbound_listen_loopback">仅本机（127.0.0.1）</string>
+    <string name="inbound_port">端口</string>
+    <string name="inbound_port_error">端口需在 1025–65535 之间</string>
+    <string name="inbound_port_taken">该端口已被其他入站占用</string>
+    <string name="inbound_auth_enable">启用用户名密码认证</string>
+    <string name="inbound_username">用户名</string>
+    <string name="inbound_password">密码</string>
+    <string name="inbound_udp">允许 UDP 转发</string>
+    <string name="inbound_enabled">启用</string>
+    <string name="inbound_save">保存</string>
+    <string name="inbound_delete">删除</string>
+
+    <string name="permission_notification_rationale">需要通知权限才能显示常驻状态并保持服务在后台运行</string>
+
+    <string name="common_back">返回</string>
+    <string name="common_cancel">取消</string>
+
+    <string name="shortcut_start">启动代理</string>
+    <string name="shortcut_stop">停止代理</string>
+</resources>

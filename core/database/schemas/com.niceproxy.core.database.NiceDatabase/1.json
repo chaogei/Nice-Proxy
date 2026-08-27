@@ -1,0 +1,89 @@
+{
+  "formatVersion": 1,
+  "database": {
+    "version": 1,
+    "identityHash": "e09d94ad86fb719984365cc45b0bb0c8",
+    "entities": [
+      {
+        "tableName": "inbounds",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `type` TEXT NOT NULL, `listen` TEXT NOT NULL, `listen_port` INTEGER NOT NULL, `auth_username` TEXT, `auth_password` TEXT, `udp_enabled` INTEGER NOT NULL, `tcp_fast_open` INTEGER NOT NULL, `udp_timeout` TEXT NOT NULL, `enabled` INTEGER NOT NULL, `sort_order` INTEGER NOT NULL, PRIMARY KEY(`id`))",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "type",
+            "columnName": "type",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "listen",
+            "columnName": "listen",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "listenPort",
+            "columnName": "listen_port",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "authUsername",
+            "columnName": "auth_username",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "authPassword",
+            "columnName": "auth_password",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "udpEnabled",
+            "columnName": "udp_enabled",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "tcpFastOpen",
+            "columnName": "tcp_fast_open",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "udpTimeout",
+            "columnName": "udp_timeout",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "enabled",
+            "columnName": "enabled",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "sortOrder",
+            "columnName": "sort_order",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "id"
+          ]
+        }
+      }
+    ],
+    "setupQueries": [
+      "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, 'e09d94ad86fb719984365cc45b0bb0c8')"
+    ]
+  }
+}

@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 一台手机向两侧设备分发连接，表达「网关」这个核心概念 -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M48,34h12a4,4 0,0 1,4 4v32a4,4 0,0 1,-4 4h-12a4,4 0,0 1,-4 -4v-32a4,4 0,0 1,4 -4zM48,40v26h12v-26z" />
+
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M36,50h-9v8h9zM25,46a3,3 0,0 0,-3 3v10a3,3 0,0 0,3 3h13v-16z" />
+
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M83,46h-13v16h13a3,3 0,0 0,3 -3v-10a3,3 0,0 0,-3 -3zM81,58h-9v-8h9z" />
+
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M39,53h5v2h-5zM64,53h5v2h-5z" />
+</vector>

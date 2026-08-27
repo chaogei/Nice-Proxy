@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    targetSdk 28 起 Android 默认禁止一切明文 HTTP，回环地址也不例外。
+    而 sing-box 的 Clash API 只能是 127.0.0.1 上的明文 HTTP —— 它是 Kotlin 侧
+    获取流量、连接、日志与切换节点的唯一通道（docs/DESIGN.md §6.9）。
+
+    这里只为回环地址开口子。绝不能用 android:usesCleartextTraffic="true"，
+    那会把整个应用的明文限制全部解除。
+-->
+<network-security-config>
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">127.0.0.1</domain>
+        <domain includeSubdomains="false">localhost</domain>
+        <domain includeSubdomains="false">::1</domain>
+    </domain-config>
+</network-security-config>
