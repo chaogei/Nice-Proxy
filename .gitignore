@@ -15,6 +15,10 @@ captures/
 !debug.keystore
 keystore.properties
 
+# 生成签名密钥时的中间产物，含私钥 base64 与口令明文。
+# 仓库是公开的，一旦提交，任何人都能签出冒充本项目的更新包。
+SIGNING-SECRETS.txt
+
 # gomobile 产物（由 native/libnice/build.ps1 生成）
 libs/*.aar
 libs/*-sources.jar

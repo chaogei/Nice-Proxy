@@ -5,35 +5,40 @@ GitHub 的「Latest release」徽章只认后者。
 
 ## 首次需要配置的 Secrets
 
-到仓库的 **Settings → Secrets and variables → Actions** 里加这四个：
+**这是发布前的必做项。** 缺了它们，workflow 会照常构建并把 APK 传成 artifact，但**不创建 Release**，并以红叉结束——未签名的 APK 根本装不上，发出去只会让人白下载几十 MB。
+
+### 为什么签名密钥不能写进 workflow
+
+本仓库是公开的，`.github/` 下的一切所有人都能读。而 Android 的更新机制只认签名不认来源：拿到私钥的人可以签出一个与你签名一致的包，系统会把它当成合法更新装上去。所以私钥只能作为 Secret 存在，且必须由仓库所有者手动创建一次。
+
+workflow 里的签名**流程**是完整的——还原密钥 → Gradle 签名 → `apksigner verify` 断言真的签上了——缺的只是这份密钥材料本身。
+
+### 1. 生成密钥
+
+```powershell
+pwsh ./scripts/new-signing-key.ps1
+```
+
+生成 RSA 4096、有效期 10000 天的 `release.jks` 和一个随机口令，并把要填的四项写进 `SIGNING-SECRETS.txt`。两个文件都已被 `.gitignore` 忽略。
+
+口令是随机的而不是让你自己想：这个密钥库只由 CI 使用，没有人需要记住它，那就没有理由用弱口令。
+
+> **密钥库丢失无法补救。** 丢了之后已安装的用户再也收不到更新，只能卸载重装、配置全部丢失。请把 `release.jks` 和口令离线备份好。GitHub Secrets 只能覆写不能读出，不要指望从那里找回。
+
+### 2. 填进 Secrets
+
+到 **Settings → Secrets and variables → Actions**，按 `SIGNING-SECRETS.txt` 里的四段分别创建：
 
 | Secret | 内容 |
 | --- | --- |
-| `KEYSTORE_BASE64` | 签名密钥文件的 base64。生成方法见下 |
-| `KEYSTORE_PASSWORD` | 密钥库密码 |
-| `KEY_ALIAS` | 密钥别名 |
-| `KEY_PASSWORD` | 密钥密码（多数情况下与密钥库密码相同） |
+| `KEYSTORE_BASE64` | 密钥库的 base64 |
+| `KEYSTORE_PASSWORD` | 密钥库口令 |
+| `KEY_ALIAS` | 密钥别名，默认 `niceproxy` |
+| `KEY_PASSWORD` | 密钥口令，与库口令相同 |
 
-没有这四个的话 workflow 仍会跑完，但产出的 APK 未签名、**装不上**。
+### 3. 删掉中间文件
 
-### 生成密钥
-
-```powershell
-# 只做一次。丢了这个文件，用户就无法覆盖安装后续版本，只能先卸载。
-keytool -genkeypair -v `
-  -keystore release.jks `
-  -alias niceproxy `
-  -keyalg RSA -keysize 2048 -validity 10000 `
-  -storepass <密钥库密码> -keypass <密钥密码>
-```
-
-然后编码成 Secret：
-
-```powershell
-[Convert]::ToBase64String([IO.File]::ReadAllBytes("release.jks"))
-```
-
-把输出整段贴进 `KEYSTORE_BASE64`。**原文件自己另存一份**，GitHub Secrets 只能覆写不能读出。
+填完后删除 `SIGNING-SECRETS.txt`——它里面是私钥明文。`release.jks` 留作备份，但别提交。
 
 本地调试签名时，在仓库根目录放一个 `keystore.properties`（已在 `.gitignore` 中）：
 

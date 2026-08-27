@@ -131,7 +131,9 @@ jobs:
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: |
           if [ -z "$KEYSTORE_BASE64" ]; then
-            echo "::warning::未配置 KEYSTORE_BASE64，产出的 APK 未签名、无法安装。配置方法见 docs/RELEASING.md"
+            # 不在这里直接失败：先把 APK 编出来传成 artifact，
+            # 至少让人能下载检查。真正的拦截在最后一步。
+            echo "::warning::未配置签名密钥，本次不会发布 Release。配置方法见 docs/RELEASING.md"
             echo "signed=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -211,10 +213,6 @@ jobs:
             echo "按手机的 CPU 架构选一个下载，**不确定就选 \`arm64-v8a\`**（2017 年后的机型基本都是）。"
             echo "\`universal\` 包含全部架构，体积大三倍，只在前者装不上时才需要。"
             echo
-            if [ "$SIGNED" != "true" ]; then
-              echo "> ⚠️ 本次构建未配置签名密钥，APK **无法直接安装**。"
-              echo
-            fi
             echo "## 保活提醒"
             echo
             echo "装好后请到「设置 → 后台保活」关闭本应用的电池优化。"
@@ -233,6 +231,9 @@ jobs:
           cat release-notes.md
 
       - name: 发布到 Release
+        # 未签名的 APK 装都装不上，发出去只会让人白下载一次几十 MB。
+        # 产物仍以 artifact 形式保留，需要的人拿得到。
+        if: steps.signing.outputs.signed == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ steps.version.outputs.name }}
@@ -248,3 +249,14 @@ jobs:
             --notes-file release-notes.md \
             --target "$GITHUB_SHA" \
             $FLAGS
+
+      - name: 缺少签名密钥时明确失败
+        # 让它显示成红叉而不是绿勾。绿勾配一个空空如也的 Release 页面，
+        # 只会让人以为是别的地方出了问题，跑去翻日志。
+        if: steps.signing.outputs.signed != 'true'
+        run: |
+          echo "::error::未配置签名密钥，构建产物无法安装，已跳过发布 Release。"
+          echo "请在 Settings → Secrets and variables → Actions 添加："
+          echo "  KEYSTORE_BASE64 / KEYSTORE_PASSWORD / KEY_ALIAS / KEY_PASSWORD"
+          echo "生成方法：pwsh ./scripts/new-signing-key.ps1（详见 docs/RELEASING.md）"
+          exit 1
