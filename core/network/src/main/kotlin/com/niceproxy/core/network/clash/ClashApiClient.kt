@@ -5,6 +5,9 @@ import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.flow.emitAll
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.retryWhen
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.serialization.json.Json
@@ -73,10 +76,40 @@ class ClashApiClient @Inject constructor() {
     fun memory(settings: ClashApiSettings): Flow<MemoryFrame> =
         webSocketFlow(settings, "memory") { json.decodeFromString<MemoryFrame>(it) }
 
+    /**
+     * 退避计数放在 `flow { }` 内部，让每一次收集各持一份。
+     *
+     * 放在外面（或者用 `retryWhen` 自带的 `attempt`）会有两个后果：并发收集的
+     * 两条流互相缩短对方的退避；以及 `attempt` 是**终身累计**的，成功发射之后
+     * 不归零 —— 一次长会话里断开五次之后，第六次就永久终结了。而通知栏的流量
+     * 数字正挂在这条流上，结果是代理明明在工作，通知却停止刷新，用户以为它死了。
+     */
     private fun <T> webSocketFlow(
         settings: ClashApiSettings,
         path: String,
         query: Map<String, String> = emptyMap(),
+        parse: (String) -> T,
+    ): Flow<T> = flow {
+        var consecutiveFailures = 0
+        emitAll(
+            frames(settings, path, query, parse)
+                // 收到一帧就说明连接是活的，退避从头开始算
+                .onEach { consecutiveFailures = 0 }
+                .retryWhen { cause, _ ->
+                    if (cause !is IOException) return@retryWhen false
+                    consecutiveFailures++
+                    // 内核真停了之后每次连接都是即刻 ECONNREFUSED，
+                    // 退避曲线必须真生效，否则这里就是个忙等循环。
+                    delay(retryDelayMillis(consecutiveFailures))
+                    true
+                },
+        )
+    }
+
+    private fun <T> frames(
+        settings: ClashApiSettings,
+        path: String,
+        query: Map<String, String>,
         parse: (String) -> T,
     ): Flow<T> = callbackFlow {
         val url = settings.baseUrl.toHttpUrl().newBuilder()
@@ -97,21 +130,32 @@ class ClashApiClient @Inject constructor() {
                     close(t)
                 }
 
+                /**
+                 * 服务端优雅关闭（内核正常停止）时只会发一个 Close 帧。不回一个
+                 * Close，`onClosed` 就永远不来，这条 callbackFlow 既不完成也不
+                 * 失败，收集方永久挂起 —— 流量数字冻结、日志停止滚动、TCP 半开。
+                 *
+                 * 结束时带一个 IOException 而不是正常完成：内核重启是这条流最
+                 * 常见的中断原因，走重试路径才能在它回来之后自动接上；正常完成
+                 * 会让流悄悄结束，用户得手动退出重进页面。
+                 */
+                override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
+                    webSocket.close(NORMAL_CLOSURE, null)
+                    close(IOException("Clash API 连接被服务端关闭（$code）"))
+                }
+
                 override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
-                    close()
+                    close(IOException("Clash API 连接已关闭（$code）"))
                 }
             },
         )
         awaitClose { socket.cancel() }
-    }.retryWhen { cause, attempt ->
-        // 内核重启期间连接必然中断，这是预期内的，退避重连而不是让 UI 报错。
-        if (cause is IOException && attempt < MAX_RETRY) {
-            delay(RETRY_DELAY_MS * (attempt + 1))
-            true
-        } else {
-            false
-        }
     }
+
+    /** 指数退避，封顶到分钟级。内核停着的时候这条曲线决定了我们多久打扰它一次。 */
+    private fun retryDelayMillis(consecutiveFailures: Int): Long =
+        (RETRY_BASE_DELAY_MS shl (consecutiveFailures - 1).coerceIn(0, MAX_BACKOFF_SHIFT))
+            .coerceAtMost(MAX_RETRY_DELAY_MS)
 
     // ---------------------------------------------------------------- 请求式接口
 
@@ -200,8 +244,21 @@ class ClashApiClient @Inject constructor() {
 
     private companion object {
         val JSON_MEDIA_TYPE = "application/json; charset=utf-8".toMediaType()
-        const val MAX_RETRY = 5L
-        const val RETRY_DELAY_MS = 300L
+
+        /** WebSocket 正常关闭码。 */
+        const val NORMAL_CLOSURE = 1000
+
+        const val RETRY_BASE_DELAY_MS = 300L
+
+        /**
+         * 不设重试次数上限，只设退避上限。
+         *
+         * 这些流的生命周期由收集方（服务、监控页）决定，它一走协程就取消了；
+         * 而只要它还在收，就说明用户还想看这些数字 —— 内核重启后自动接上
+         * 才是对的。封顶一分钟之后代价是每分钟一次本机连接尝试，可以忽略。
+         */
+        const val MAX_RETRY_DELAY_MS = 60_000L
+        const val MAX_BACKOFF_SHIFT = 8
     }
 }
 

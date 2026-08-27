@@ -2,11 +2,17 @@ package com.niceproxy.core.service
 
 import android.content.Context
 import android.content.Intent
+import android.util.Log
 import androidx.core.content.ContextCompat
+import com.niceproxy.core.common.ApplicationScope
+import com.niceproxy.core.datastore.SettingsDataStore
+import com.niceproxy.core.service.work.ProxyWatchdogScheduler
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -20,6 +26,9 @@ import javax.inject.Singleton
 @Singleton
 class ProxyServiceController @Inject constructor(
     @ApplicationContext private val context: Context,
+    private val settings: SettingsDataStore,
+    private val watchdog: ProxyWatchdogScheduler,
+    @ApplicationScope private val scope: CoroutineScope,
 ) {
 
     private val _state = MutableStateFlow<ProxyState>(ProxyState.Stopped)
@@ -67,6 +76,41 @@ class ProxyServiceController @Inject constructor(
     }
 
     /**
+     * 「别再试了」。
+     *
+     * 存在的理由是 [toggle] 在非 active 状态下只会走 [start] 分支 —— 代理进入终态失败
+     * 之后，界面上根本不存在「停止」按钮，而落盘的运行意图还留着，看门狗会每 15 分钟
+     * 醒来、失败一次、弹一次通知。用户唯一的出路竟然是「先想办法让它成功启动一次，
+     * 再按停止」，这显然不能算一条出路。
+     *
+     * UI 应当在 [ProxyState.Failed] 上给出一个走这里的入口。
+     */
+    fun stopAndForget() {
+        forgetRunIntent()
+        // 服务没在跑的时候不必为了停止而先把它拉起来；状态本来就是 Failed / Stopped，
+        // 直接就地清掉即可
+        if (_state.value.isActive) {
+            stop()
+        } else {
+            _state.value = ProxyState.Stopped
+        }
+    }
+
+    /**
+     * 清掉落盘的「代理本该在跑」，并撤销看门狗。
+     *
+     * 用 [ApplicationScope] 而不是调用方的作用域：这条写入没落盘的后果是看门狗把
+     * 用户刚放弃的服务又拉起来，它必须活过任何一个页面或服务的销毁。
+     */
+    private fun forgetRunIntent() {
+        watchdog.cancel()
+        scope.launch {
+            runCatching { settings.setShouldBeRunning(false) }
+                .onFailure { Log.w(TAG, "运行意图写入失败", it) }
+        }
+    }
+
+    /**
      * 把最新配置应用到运行中的内核。
      *
      * 服务端会先比对指纹：没变就直接返回，不会为一次「其实没改到内核」的保存
@@ -99,5 +143,9 @@ class ProxyServiceController @Inject constructor(
 
     internal fun postConfigMessage(text: String) {
         _configMessage.value = text
+    }
+
+    private companion object {
+        const val TAG = "ProxyServiceController"
     }
 }

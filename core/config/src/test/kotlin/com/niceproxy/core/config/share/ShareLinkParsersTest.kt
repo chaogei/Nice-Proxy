@@ -161,10 +161,12 @@ class ShareLinkParsersTest {
         }
 
         @Test
-        fun `跳过证书校验参数的多种别名`() {
+        fun `跳过证书校验的各种别名一律不予采信`() {
+            // 链接来自剪贴板、二维码、订阅正文，全是外部输入。想关证书校验
+            // 只能走节点编辑页手动开 —— 那条路径有明确的风险提示。
             listOf("allowInsecure=1", "insecure=true", "skip-cert-verify=1").forEach { param ->
                 val node = ShareLinkParsers.parse("trojan://pw@h.com:443?$param#n").getOrThrow()
-                assertThat(node.tls?.insecure).isTrue()
+                assertThat(node.tls?.insecure).isFalse()
             }
         }
     }
@@ -277,6 +279,21 @@ class ShareLinkParsersTest {
             assertThat(result.nodes).hasSize(2)
             assertThat(result.nodes.map { it.name }).containsExactly("A", "B")
             assertThat(result.failedLines).hasSize(1)
+        }
+
+        @Test
+        fun `批量解析统计出被忽略的跳过证书校验请求`() {
+            val text = """
+                trojan://pw@a.com:443?insecure=1#A
+                trojan://pw@b.com:443#B
+                hysteria2://pw@c.com:443?allowinsecure=1#C
+            """.trimIndent()
+            val result = ShareLinkParsers.parseMany(text)
+
+            // 节点照常导入，只是证书校验保持开启
+            assertThat(result.nodes).hasSize(3)
+            assertThat(result.nodes.none { it.tls?.insecure == true }).isTrue()
+            assertThat(result.ignoredInsecureCount).isEqualTo(2)
         }
     }
 
@@ -486,10 +503,10 @@ class ShareLinkParsersTest {
         }
 
         @Test
-        fun `insecure 写成 yes`() {
+        fun `insecure 写成 yes 也一样不予采信`() {
             // Clash 转换器生成的链接里常见
             assertThat(ShareLinkParsers.parse("trojan://pw@h.com:443?insecure=yes#n")
-                .getOrThrow().tls?.insecure).isTrue()
+                .getOrThrow().tls?.insecure).isFalse()
         }
 
         @Test

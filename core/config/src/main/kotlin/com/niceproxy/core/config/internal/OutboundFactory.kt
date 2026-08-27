@@ -7,12 +7,19 @@ import com.niceproxy.core.model.ServerProfile
 import com.niceproxy.core.model.TlsConfig
 import com.niceproxy.core.model.TransportConfig
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonObject
 
 internal sealed interface OutboundResult {
-    data class Ok(val json: JsonObject) : OutboundResult
+    data class Ok(
+        val json: JsonObject,
+        /** 这个出站真的写出了 `insecure: true`，调用方据此给出安全警告。 */
+        val insecureTls: Boolean = false,
+    ) : OutboundResult
+
     data class Invalid(val reason: String) : OutboundResult
 }
 
@@ -25,6 +32,7 @@ internal sealed interface OutboundResult {
 internal class OutboundFactory {
 
     fun create(node: ServerProfile): OutboundResult {
+        mismatchedParams(node)?.let { return OutboundResult.Invalid(it) }
         validateCommon(node)?.let { return OutboundResult.Invalid(it) }
 
         val params = node.params
@@ -56,12 +64,47 @@ internal class OutboundFactory {
                 putMultiplex(node)
             }
         }.fold(
-            onSuccess = { OutboundResult.Ok(it) },
+            onSuccess = { OutboundResult.Ok(it, insecureTls = it.declaresInsecureTls()) },
             onFailure = { OutboundResult.Invalid(it.message ?: "未知错误") },
         )
     }
 
     // ---------- 通用校验 ----------
+
+    /**
+     * `protocol` 与 `params` 必须是同一个协议。
+     *
+     * 正常路径下这两者由同一个解析器一起产出，不可能对不上。会对不上是因为
+     * 数据库的降级：`protocol` 列存的是枚举名，读不出来时 `NiceTypeConverters`
+     * 会兜底成 `TROJAN`（选它是因为绝不能兜底成 DIRECT —— 那会生成一个可用的
+     * 直连出站，用户以为在走代理而流量裸奔）。若此时 `params_json` 恰好完好，
+     * 就会拼出 `type: "trojan"` 配着别的协议字段的 outbound。
+     *
+     * 那种 outbound 语法合法、语义残缺，sing-box 会拒绝**整份**配置 ——
+     * 一条坏记录让所有节点一起失效、代理起不来。所以要在这里单独挡下来，
+     * 让它退化成「这一个节点不可用」。
+     *
+     * 穷举 `when` 是刻意的：以后新增协议时编译器会强制更新这张表。
+     */
+    private fun mismatchedParams(node: ServerProfile): String? {
+        val params = node.params
+        val consistent = when (node.protocol) {
+            ProxyProtocol.DIRECT -> params is ProtocolParams.Direct
+            ProxyProtocol.HTTP -> params is ProtocolParams.Http
+            ProxyProtocol.SOCKS -> params is ProtocolParams.Socks
+            ProxyProtocol.SHADOWSOCKS -> params is ProtocolParams.Shadowsocks
+            ProxyProtocol.VMESS -> params is ProtocolParams.VMess
+            ProxyProtocol.VLESS -> params is ProtocolParams.VLess
+            ProxyProtocol.TROJAN -> params is ProtocolParams.Trojan
+            ProxyProtocol.HYSTERIA -> params is ProtocolParams.Hysteria
+            ProxyProtocol.HYSTERIA2 -> params is ProtocolParams.Hysteria2
+            ProxyProtocol.TUIC -> params is ProtocolParams.Tuic
+            ProxyProtocol.ANYTLS -> params is ProtocolParams.AnyTls
+            ProxyProtocol.SHADOWTLS -> params is ProtocolParams.ShadowTls
+            ProxyProtocol.SSH -> params is ProtocolParams.Ssh
+        }
+        return if (consistent) null else "节点数据已损坏（协议与参数不匹配），请重新导入"
+    }
 
     private fun validateCommon(node: ServerProfile): String? {
         if (node.protocol == ProxyProtocol.DIRECT) return null
@@ -310,6 +353,14 @@ internal class OutboundFactory {
         val PORT_RANGE_PATTERN = Regex("""^\d{1,5}(:\d{1,5})?$""")
     }
 }
+
+/**
+ * 判据取自生成结果本身，而不是把 `putTls` 里那串条件
+ * （tls 非空、enabled、insecure）再抄一份 —— 抄出来的第二份迟早会跟原件漂移，
+ * 而漂移的后果是「配置里关着证书校验，警告却没发出来」。
+ */
+private fun JsonObject.declaresInsecureTls(): Boolean =
+    ((this["tls"] as? JsonObject)?.get("insecure") as? JsonPrimitive)?.booleanOrNull == true
 
 /** QUIC 系协议在 ALPN 缺省时给出协议要求的默认值。 */
 private fun ProxyProtocol.defaultAlpn(): List<String> = when (this) {

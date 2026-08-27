@@ -109,10 +109,24 @@ data class ServerGroup(
     /** 附加请求头，部分机场按自定义头返回不同格式。JSON 对象字符串。 */
     val extraHeaders: String? = null,
 ) {
+    /**
+     * 编译好的 [remarksFilter]，null 表示不过滤。
+     *
+     * [accepts] 是按节点逐个调用的，机场动辄三千个节点，现编译就是三千次编译
+     * 同一个 pattern。缓存在实例上：一次订阅更新自始至终用的是同一个分组对象。
+     *
+     * 委托属性没有 backing field，kotlinx.serialization 一律跳过，备份格式不受影响；
+     * 也正因为如此不能加 `@Transient`，插件会判定它多余而报错。
+     */
+    private val compiledFilter: Regex? by lazy {
+        remarksFilter
+            ?.takeIf { it.isNotBlank() }
+            ?.let { runCatching { Regex(it) }.getOrNull() }
+    }
+
     /** 按 [remarksFilter] 判断某个节点名是否应当保留。正则非法时视为不过滤。 */
     fun accepts(nodeName: String): Boolean {
-        val pattern = remarksFilter?.takeIf { it.isNotBlank() } ?: return true
-        val regex = runCatching { Regex(pattern) }.getOrNull() ?: return true
+        val regex = compiledFilter ?: return true
         val matched = regex.containsMatchIn(nodeName)
         return if (filterExclude) !matched else matched
     }

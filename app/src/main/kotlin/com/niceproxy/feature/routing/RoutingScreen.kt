@@ -2,6 +2,7 @@ package com.niceproxy.feature.routing
 
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -22,14 +23,18 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.ArrowUpward
-import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -60,6 +65,8 @@ fun RoutingScreen(
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val message by viewModel.message.collectAsStateWithLifecycle()
     var banner by remember { mutableStateOf<String?>(null) }
+    var pendingMode by remember { mutableStateOf<RoutingMode?>(null) }
+    var pendingDeleteRule by remember { mutableStateOf<RoutingRule?>(null) }
 
     LaunchedEffect(message) {
         message?.let {
@@ -115,7 +122,16 @@ fun RoutingScreen(
                 RoutingMode.entries.forEach { mode ->
                     FilterChip(
                         selected = state.mode == mode,
-                        onClick = { viewModel.setMode(mode) },
+                        onClick = {
+                            // 点一下模式 chip 会整体替换规则列表，而唯一说明这件事的
+                            // 文案躺在规则编辑页里 —— 只有已经知道的人才看得到。
+                            // 有东西会被删掉时必须先问一句。
+                            if (mode.replacesRules(state)) {
+                                pendingMode = mode
+                            } else {
+                                viewModel.setMode(mode)
+                            }
+                        },
                         label = { Text(mode.displayName) },
                     )
                 }
@@ -156,7 +172,7 @@ fun RoutingScreen(
                     onToggle = { viewModel.setRuleEnabled(rule.id, it) },
                     onMoveUp = { viewModel.moveRule(index, index - 1) },
                     onMoveDown = { viewModel.moveRule(index, index + 1) },
-                    onDelete = { viewModel.deleteRule(rule.id) },
+                    onDelete = { pendingDeleteRule = rule },
                 )
             }
         }
@@ -180,7 +196,63 @@ fun RoutingScreen(
             }
         }
     }
+
+    pendingMode?.let { mode ->
+        val doomed = state.rules.count { !it.locked }
+        AlertDialog(
+            onDismissRequest = { pendingMode = null },
+            title = { Text("套用「${mode.displayName}」") },
+            text = {
+                Text(
+                    "预设模式会整体替换规则列表：当前 $doomed 条未锁定的规则将被删除，" +
+                        "已锁定的会保留。此操作不可撤销。\n\n" +
+                        "想留下某条手写规则，可以先取消，打开那条规则的" +
+                        "「套用模板时保留」再回来。",
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    viewModel.setMode(mode)
+                    pendingMode = null
+                }) { Text("套用") }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingMode = null }) { Text("取消") }
+            },
+        )
+    }
+
+    pendingDeleteRule?.let { rule ->
+        AlertDialog(
+            onDismissRequest = { pendingDeleteRule = null },
+            title = { Text("删除规则") },
+            text = {
+                Text(
+                    "「${rule.name}」将被删除，此操作不可撤销。" +
+                        "命中它的流量会改由后面的规则或默认出站处理。",
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    viewModel.deleteRule(rule.id)
+                    pendingDeleteRule = null
+                }) { Text("删除") }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingDeleteRule = null }) { Text("取消") }
+            },
+        )
+    }
 }
+
+/**
+ * 切到这个模式会不会真的删掉东西。
+ *
+ * 自定义模式只改记号不动规则；已经在这个模式上、或者根本没有未锁定的规则时，
+ * 弹确认框只是徒增一次点击。
+ */
+private fun RoutingMode.replacesRules(state: RoutingUiState): Boolean =
+    this != state.mode && this != RoutingMode.CUSTOM && state.rules.any { !it.locked }
 
 @Composable
 private fun RuleRow(
@@ -193,6 +265,7 @@ private fun RuleRow(
     onMoveDown: () -> Unit,
     onDelete: () -> Unit,
 ) {
+    var menuOpen by remember { mutableStateOf(false) }
     GlassPanel(
         hazeState = LocalHazeState.current,
         modifier = Modifier.fillMaxWidth(),
@@ -220,39 +293,43 @@ private fun RuleRow(
                     maxLines = 2,
                 )
             }
+            // 四个控件原来挤在一起，其中三个小于 48dp，而最靠边那个还是不可逆的删除。
+            // 上移/下移改回默认 48dp，删除挪进溢出菜单并加确认。
             Column {
-                IconButton(
-                    onClick = onMoveUp,
-                    enabled = canMoveUp,
-                    modifier = Modifier.size(28.dp),
-                ) {
+                IconButton(onClick = onMoveUp, enabled = canMoveUp) {
                     Icon(
                         Icons.Default.ArrowUpward,
                         contentDescription = "上移",
-                        modifier = Modifier.size(16.dp),
+                        modifier = Modifier.size(18.dp),
                     )
                 }
-                IconButton(
-                    onClick = onMoveDown,
-                    enabled = canMoveDown,
-                    modifier = Modifier.size(28.dp),
-                ) {
+                IconButton(onClick = onMoveDown, enabled = canMoveDown) {
                     Icon(
                         Icons.Default.ArrowDownward,
                         contentDescription = "下移",
-                        modifier = Modifier.size(16.dp),
+                        modifier = Modifier.size(18.dp),
                     )
                 }
             }
             Spacer(Modifier.width(4.dp))
             Switch(checked = rule.enabled, onCheckedChange = onToggle)
-            IconButton(onClick = onDelete, modifier = Modifier.size(32.dp)) {
-                Icon(
-                    Icons.Default.Delete,
-                    contentDescription = "删除",
-                    modifier = Modifier.size(18.dp),
-                    tint = MaterialTheme.colorScheme.error,
-                )
+            Box {
+                IconButton(onClick = { menuOpen = true }) {
+                    Icon(
+                        Icons.Default.MoreVert,
+                        contentDescription = "更多操作",
+                        modifier = Modifier.size(18.dp),
+                    )
+                }
+                DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                    DropdownMenuItem(
+                        text = { Text("删除", color = MaterialTheme.colorScheme.error) },
+                        onClick = {
+                            menuOpen = false
+                            onDelete()
+                        },
+                    )
+                }
             }
         }
     }

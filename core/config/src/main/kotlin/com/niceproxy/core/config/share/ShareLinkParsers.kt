@@ -26,7 +26,20 @@ object ShareLinkParsers {
     private val json = Json { ignoreUnknownKeys = true; isLenient = true }
 
     /** 单条链接。无法识别时返回失败并带上原因。 */
-    fun parse(link: String, groupId: String = ""): Result<ServerProfile> {
+    fun parse(link: String, groupId: String = ""): Result<ServerProfile> =
+        parseSanitized(link, groupId).map { it.profile }
+
+    /**
+     * 与 [parse] 相同，但额外告知这条链接是否要求过关闭证书校验。
+     *
+     * [RemoteTlsPolicy] 的清洗放在这一个出口，而不是分散到各协议分支里：
+     * 分支有十来个，往后还会加，而漏掉清洗的默认结果是「悄悄放行 insecure」——
+     * 一个不会有任何测试失败、也不会有任何界面异常的漏洞。
+     */
+    internal fun parseSanitized(
+        link: String,
+        groupId: String = "",
+    ): Result<RemoteTlsPolicy.Sanitized> {
         val trimmed = UriSupport.sanitize(link)
         if (trimmed.isEmpty()) return Result.failure(IllegalArgumentException("链接为空"))
 
@@ -44,7 +57,7 @@ object ShareLinkParsers {
                 "http", "https" -> parseHttp(trimmed, groupId)
                 else -> throw IllegalArgumentException("不支持的协议：$scheme")
             }
-        }
+        }.map(RemoteTlsPolicy::sanitize)
     }
 
     /**
@@ -56,21 +69,27 @@ object ShareLinkParsers {
     fun parseMany(text: String, groupId: String = ""): BatchResult {
         val nodes = mutableListOf<ServerProfile>()
         val failures = mutableListOf<String>()
+        var ignoredInsecure = 0
         text.lineSequence()
             .map { UriSupport.sanitize(it) }
             .filter { it.isNotEmpty() && !it.startsWith("#") && !it.startsWith("//") }
             .forEach { line ->
-                parse(line, groupId).fold(
-                    onSuccess = { nodes += it },
+                parseSanitized(line, groupId).fold(
+                    onSuccess = {
+                        nodes += it.profile
+                        if (it.insecureIgnored) ignoredInsecure++
+                    },
                     onFailure = { failures += line.take(60) },
                 )
             }
-        return BatchResult(nodes, failures)
+        return BatchResult(nodes, failures, ignoredInsecure)
     }
 
     data class BatchResult(
         val nodes: List<ServerProfile>,
         val failedLines: List<String>,
+        /** 有多少个节点要求关闭 TLS 证书校验、已被忽略，见 RemoteTlsPolicy。 */
+        val ignoredInsecureCount: Int = 0,
     )
 
     // ------------------------------------------------------------ Shadowsocks

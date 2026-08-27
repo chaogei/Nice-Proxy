@@ -83,23 +83,35 @@ class ProxyNotifications @Inject constructor(
         }
 
     /**
+     * 通知上真正会被用户看见的那部分。
+     *
+     * 拆出来是为了**判重**：这条通知每秒要刷好几次，而 `notify` 是一次跨进程 Binder
+     * 调用，全都发生在主线程上。速率从 1.0 KB/s 变成 1.04 KB/s 时渲染出来的文本
+     * 一模一样，那一次 IPC 纯属浪费。比对原始字节数没用 —— 那玩意儿每秒都在变；
+     * 只有比对**渲染后的文本**才能真正把无效刷新挡掉。
+     */
+    data class Content(
+        val title: String,
+        val text: String?,
+        val ongoing: Boolean,
+    )
+
+    /**
      * @param statusText 覆盖正文。用于展示 [ProxyState] 表达不了的过渡信息 ——
      *        典型的是退避重试的倒计时：状态确实是 Starting，但干巴巴显示
      *        「正在启动…」半分钟会让用户以为卡死了。
      */
-    fun build(
+    fun content(
         state: ProxyState,
         traffic: TrafficSnapshot,
-        contentIntent: PendingIntent?,
-        stopIntent: PendingIntent,
         statusText: String? = null,
-    ): Notification {
+    ): Content {
         val title = when (state) {
             ProxyState.Starting -> context.getString(R.string.service_state_starting)
             ProxyState.Stopping -> context.getString(R.string.service_state_stopping)
             is ProxyState.Failed -> context.getString(R.string.service_state_failed)
             is ProxyState.Running -> context.getString(R.string.service_state_running)
-            ProxyState.Stopped -> context.getString(R.string.service_state_running)
+            ProxyState.Stopped -> context.getString(R.string.service_state_stopped)
         }
 
         val text = statusText ?: when (state) {
@@ -123,11 +135,23 @@ class ProxyNotifications @Inject constructor(
             else -> null
         }
 
+        return Content(title = title, text = text, ongoing = state.isActive)
+    }
+
+    /**
+     * @param contentIntent 与 [stopIntent] 都由调用方缓存后传进来。构造它们各是一次
+     *        跨进程调用，而这条通知每秒要重建好几次 —— 每次都现建等于白白多花几次 IPC。
+     */
+    fun build(
+        content: Content,
+        contentIntent: PendingIntent?,
+        stopIntent: PendingIntent,
+    ): Notification {
         return NotificationCompat.Builder(context, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.stat_sys_download_done)
-            .setContentTitle(title)
-            .setContentText(text)
-            .setOngoing(state.isActive)
+            .setContentTitle(content.title)
+            .setContentText(content.text)
+            .setOngoing(content.ongoing)
             .setOnlyAlertOnce(true)
             .setShowWhen(false)
             .setSilent(true)

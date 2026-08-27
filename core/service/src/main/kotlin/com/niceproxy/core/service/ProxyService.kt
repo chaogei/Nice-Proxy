@@ -1,7 +1,9 @@
 package com.niceproxy.core.service
 
+import android.app.PendingIntent
 import android.content.Intent
 import android.content.pm.ServiceInfo
+import android.net.Network
 import android.net.wifi.WifiManager
 import android.os.Build
 import android.os.PowerManager
@@ -13,6 +15,7 @@ import com.niceproxy.core.config.ConfigResult
 import com.niceproxy.core.data.ConfigRepository
 import com.niceproxy.core.data.InboundRepository
 import com.niceproxy.core.datastore.SettingsDataStore
+import com.niceproxy.core.model.ClashApiSettings
 import com.niceproxy.core.model.InboundService
 import com.niceproxy.core.model.InboundType
 import com.niceproxy.core.model.NetworkPreference
@@ -28,7 +31,9 @@ import com.niceproxy.core.service.work.ProxyWatchdogScheduler
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.collectLatest
@@ -36,6 +41,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import javax.inject.Inject
 
 /**
@@ -44,6 +50,11 @@ import javax.inject.Inject
  * **前台服务类型选用 `specialUse`**：代理服务器不属于任何预定义类型，
  * 而 `dataSync` 在 Android 15 上有 24 小时内累计 6 小时的运行上限 ——
  * 对一个需要长期运行的网关来说是致命的。见 docs/DESIGN.md §6.8 与 §10 P-2。
+ *
+ * **关于线程。** `lifecycleScope` 跑在 `Dispatchers.Main.immediate` 上，所以这个文件里
+ * 每一个 `launch` 的协程体默认都在主线程。真正会阻塞的东西只有内核启停与 PAC 的
+ * socket 操作，它们分别由 [NiceCore] 和 [PacServer] 在各自内部切到 IO —— 这里刻意
+ * 不再包一层 `withContext`，让「哪些调用会挂起」这件事由被调用方的签名说清楚。
  */
 @AndroidEntryPoint
 class ProxyService : LifecycleService() {
@@ -62,11 +73,11 @@ class ProxyService : LifecycleService() {
     @Inject lateinit var watchdog: ProxyWatchdogScheduler
 
     /**
-     * 用于那些**必须活过服务销毁**的写操作。
+     * 用于那些**必须活过服务销毁**的工作。
      *
-     * 「用户按了停止」这件事一定要落盘，否则看门狗过 15 分钟就会把它又拉起来。
-     * 而 `lifecycleScope` 在 `onDestroy` 时就被取消了，`stopSelf()` 之后
-     * 那点写入极可能来不及执行。
+     * 两类：一是「用户按了停止」这件事一定要落盘，否则看门狗过 15 分钟就会把它又拉
+     * 起来；二是内核与 PAC 的关停 —— 它们现在是挂起操作，而 `lifecycleScope` 在
+     * `onDestroy` 时就被取消了，放在那里跑等于把内核撂在半路上。见 [shutdownDetached]。
      */
     @Inject @ApplicationScope lateinit var appScope: CoroutineScope
 
@@ -106,9 +117,29 @@ class ProxyService : LifecycleService() {
     /** 内核最近一次成功启动的时刻，用来识别「起来了又立刻死」的反复横跳。 */
     private var lastCoreStartAt = 0L
 
+    /**
+     * 上一次真正下发出去的通知内容。
+     *
+     * 通知每秒要刷好几次，而 `notify` 是一次跨进程 Binder 调用。速率读数从 1.0 KB/s
+     * 变成 1.04 KB/s 时渲染出来的文本完全一样，那次 IPC 就是纯浪费。
+     */
+    private var lastNotified: ProxyNotifications.Content? = null
+
+    /**
+     * 两个 PendingIntent 在 [onCreate] 建一次就够了。
+     *
+     * `getActivity` / `getService` 都要走 ActivityManager 的 Binder 调用，而以前它们
+     * 是在每次刷新通知时现建的 —— 一秒钟四次的主线程 IPC，全部花在构造两个内容
+     * 完全相同的对象上。
+     */
+    private var contentIntent: PendingIntent? = null
+    private var stopIntent: PendingIntent? = null
+
     override fun onCreate() {
         super.onCreate()
         notifications.ensureChannel()
+        contentIntent = launchIntent()
+        stopIntent = stopPendingIntent(this)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -139,7 +170,7 @@ class ProxyService : LifecycleService() {
         if (!promoteToForeground()) {
             // 这是 Android 12+ 的后台启动限制，重试也一样会被拦；
             // 出路是让用户关掉电池优化（那是官方豁免项之一），或者回到应用内手动开。
-            fail("无法在后台启动，请关闭本应用的电池优化", retryable = false)
+            fail("无法在后台启动，请关闭本应用的电池优化", cause = FailureCause.ForegroundStartBlocked)
             return
         }
 
@@ -152,7 +183,7 @@ class ProxyService : LifecycleService() {
                 // 这条路径上可能已经拿到了 WakeLock / WifiLock，必须交给 fail() 收尾，
                 // 否则协程一死掉它们就永远留在手上持续耗电。
                 Log.w(TAG, "启动流程异常中断", t)
-                fail("内核启动失败", t.message)
+                fail("内核启动失败", t.message, FailureCause.CoreStartFailed)
             }
         }
     }
@@ -165,7 +196,10 @@ class ProxyService : LifecycleService() {
             is ConfigResult.Failure -> {
                 // 配置本身不合法是确定性错误，重试一万次也是同样的结果，
                 // 只会让用户盯着一个永远在「即将重试」的通知。
-                fail(result.errors.joinToString("；") { it.message }, retryable = false)
+                fail(
+                    result.errors.joinToString("；") { it.message },
+                    cause = FailureCause.InvalidConfig,
+                )
                 return
             }
             is ConfigResult.Success -> prepare(result)
@@ -175,17 +209,24 @@ class ProxyService : LifecycleService() {
 
         core.start(prepared.json, workDir).fold(
             onSuccess = {
-                // 生成配置加起内核有几百毫秒，这期间用户完全可能已经按了停止。
-                // 不检查的话状态会被改回 Running，而服务本身正在销毁。
+                // 生成配置加起内核有几百毫秒（远程 rule-set 还可能是几十秒），
+                // 这期间用户完全可能已经按了停止。不检查的话状态会被改回 Running，
+                // 而服务本身正在销毁。
                 if (controller.state.value !is ProxyState.Starting) {
                     Log.i(TAG, "内核起来时已被要求停止，立即收回")
-                    core.stop()
+                    // NonCancellable：走到这里说明多半有人刚取消过 startJob，
+                    // 而这一步要是被取消掉，就留下一个没人持有引用的内核在占着端口
+                    withContext(NonCancellable) { core.stop() }
                     return
                 }
                 onStarted(prepared)
             },
             onFailure = { throwable ->
-                fail(translateStartFailure(throwable), throwable.message)
+                fail(
+                    translateStartFailure(throwable),
+                    throwable.message,
+                    FailureCause.CoreStartFailed,
+                )
             },
         )
     }
@@ -260,7 +301,7 @@ class ProxyService : LifecycleService() {
      * 脚本内容按请求方使用的主机名动态生成：同一台设备可能同时挂在 Wi-Fi
      * 和热点上，客户端从哪个网段进来，PAC 里就该给哪个地址。
      */
-    private fun startPacIfConfigured(inbounds: List<InboundService>) {
+    private suspend fun startPacIfConfigured(inbounds: List<InboundService>) {
         val pac = inbounds.firstOrNull { it.type == InboundType.PAC } ?: return
         val httpPort = inbounds
             .firstOrNull { it.type == InboundType.MIXED || it.type == InboundType.HTTP }
@@ -369,17 +410,37 @@ class ProxyService : LifecycleService() {
      * 收到任何通知：状态仍是 Running、通知栏仍显示正常、只有客户端会莫名其妙连不上。
      * 这是「用着用着就没了」里最难察觉的一种，因为界面上一切正常。
      *
-     * [NiceCore.isRunning] 读的是 Go 侧的实例状态，是个纯内存判断，
-     * 所以可以按秒级轮询而不心疼。
+     * **这里以前查的是 [NiceCore.isRunning]，而那恰恰查不出上面这件事。** 那一位只在
+     * `Start()` 成功时置 true、`Close()` 里置 false，内核自己退出时没有任何代码会把它
+     * 改回去 —— 换句话说，健康检查唯一要防的场景正是它测不到的场景。现在改成去请求
+     * Clash API 的 `/version`：那是内核自己起的 HTTP 服务，它能答上话，就说明内核的
+     * 事件循环还活着、监听套接字还在。这是端到端的证据，不是我们自己记的一笔账。
+     *
+     * 为什么不改去 Go 侧监听 `box` 的生命周期：sing-box 没有暴露「实例已终止」的通知
+     * 通道，要做只能在 libnice 里另起一条 goroutine 去轮询内部状态，等于把同样的探测
+     * 挪到一个更难观测、崩了还会直接 SIGABRT 的地方。探测 Clash API 的代价只是每
+     * [HEALTH_CHECK_INTERVAL_MS] 一次的回环请求。
      */
     private fun superviseCore() {
         if (healthJob?.isActive == true) return
         healthJob = lifecycleScope.launch {
+            val api = runCatching { settings.clashApiSettings() }.getOrElse {
+                // 读不到就没法探测。宁可不监督也不能让未捕获异常炸掉整个进程 ——
+                // 那可比「监督失灵」严重得多。
+                Log.w(TAG, "读取 Clash API 配置失败，内核存活探测未启用", it)
+                return@launch
+            }
+            var misses = 0
             while (true) {
                 delay(HEALTH_CHECK_INTERVAL_MS)
-                if (controller.state.value !is ProxyState.Running) continue
+                if (controller.state.value !is ProxyState.Running) {
+                    // 重启期间探不到是理所当然的，那些不该算进死亡判定里
+                    misses = 0
+                    continue
+                }
 
-                if (core.isRunning) {
+                if (probeCore(api)) {
+                    misses = 0
                     // 稳住足够久才算真的好了，这时才把退避计数清掉
                     if (failureStreak > 0 && coreUptime() >= MIN_HEALTHY_UPTIME_MS) {
                         Log.i(TAG, "内核已稳定运行，重置退避计数")
@@ -388,22 +449,40 @@ class ProxyService : LifecycleService() {
                     continue
                 }
 
-                Log.w(TAG, "内核已不在运行，尝试拉起")
+                // 单次探测失败不足以判死刑：内核正忙于处理一波连接、或者刚好赶上
+                // 系统在做别的事，都可能让一次回环请求超时。为此重启内核的代价是
+                // 断掉全屋设备的连接，得先确认它是真的不动了。
+                if (++misses < HEALTH_MISSES_BEFORE_REVIVE) {
+                    Log.i(TAG, "内核存活探测第 $misses 次失败，再观察一轮")
+                    continue
+                }
+                Log.w(TAG, "内核已连续 $misses 次不响应，尝试拉起")
+                misses = 0
                 runApply("内核自愈") { reviveCore() }
             }
         }
     }
 
+    /**
+     * @return 内核是否还活着。
+     */
+    private suspend fun probeCore(api: ClashApiSettings): Boolean {
+        // 宿主这边都已经不持有实例了，那连探都不用探。这一步同时挡掉了
+        // 「内核确实被停了，但 Clash API 端口恰好被别的进程接管」这种误判。
+        if (!core.isRunning()) return false
+        return clashApi.version(api).isSuccess
+    }
+
     private suspend fun reviveCore() {
         // 排到执行时状态可能已经变了：用户按了停止，或者别的路径已经重启过内核
         if (controller.state.value !is ProxyState.Running) return
-        if (core.isRunning) return
         val config = runningConfig ?: return
+        if (probeCore(settings.clashApiSettings())) return
 
         if (coreUptime() < MIN_HEALTHY_UPTIME_MS) {
             // 起来没多久就又死了，说明不是偶发故障。交给退避，
             // 否则就是每 10 秒重启一次内核的无限循环，电量和日志一起遭殃。
-            fail("内核反复退出")
+            fail("内核反复退出", cause = FailureCause.CoreExitedRepeatedly)
             return
         }
 
@@ -421,16 +500,30 @@ class ProxyService : LifecycleService() {
         // 当前网络，那一下又会排一次自愈重启，形成自我触发的死循环。
         if (networkJob?.isActive == true) return
 
+        var current: Network? = null
         var isFirstCallback = true
         networkJob = networkBinder.defaultNetworkChanges()
-            .onEach {
+            .onEach { network ->
                 // 监听地址会随网络变化，通知里的端口信息与首页都要刷新
                 refreshNotification()
+
+                // onLost 只刷通知，不重启。理由有两条：其一，没网的时候重启内核毫无
+                // 意义，起来了照样连不上；其二，每失败一次 failureStreak 就加一，而清零
+                // 要求连续稳定 60 秒 —— 地铁、电梯这种抖动环境下永远达不到，六次之后就
+                // 进终态失败了。
+                if (network == null) return@onEach
+
                 if (isFirstCallback) {
                     // 注册瞬间必然收到一次当前网络，那不是「切网」
                     isFirstCallback = false
+                    current = network
                     return@onEach
                 }
+                // 同一张网络的重复通告（能力变化、断了又以同一 netId 回来）不算切网。
+                // 只有真的换到另一张网络，QUIC 连接才必须重建。
+                if (network == current) return@onEach
+
+                current = network
                 scheduleNetworkRecovery()
             }
             .launchIn(lifecycleScope)
@@ -511,8 +604,9 @@ class ProxyService : LifecycleService() {
         trafficJob?.cancel()
         pacServer.stop()
 
-        // 停与起之间没有挂起点，因此协程即使此刻被取消，也不会把内核卡在
-        // 「停了还没起」的中间态上。
+        // 停与起之间现在**有**挂起点（两者都要切到 IO 上跑）。协程若在这中间被取消，
+        // 内核会停在「停了还没起」的状态 —— 但那没问题：唯一会取消 applyJob 的是
+        // [teardown]，而它接着就会把内核关停，停着正是它要的结果。
         core.stop()
         // bindProcessToNetwork 只影响之后新建的 socket，改了偏好就得赶在内核起来前落定。
         // 没改就别动：重新 requestNetwork 是异步的，中间那段空窗期反而会让出站临时跑回默认网络。
@@ -524,7 +618,11 @@ class ProxyService : LifecycleService() {
         result.fold(
             onSuccess = { onStarted(config, startedAtMillis = startedAt) },
             onFailure = { throwable ->
-                fail(translateStartFailure(throwable), throwable.message)
+                fail(
+                    translateStartFailure(throwable),
+                    throwable.message,
+                    FailureCause.CoreStartFailed,
+                )
             },
         )
     }
@@ -616,19 +714,29 @@ class ProxyService : LifecycleService() {
      * 切换 Wi-Fi 时地址还没就绪、上一个内核实例的端口还没释放、刚开机时网络栈没起来。
      * 遇上这些就永久停机，对一个给全屋设备供网的网关来说代价太大。
      *
-     * @param retryable 确定性错误（配置不合法、后台启动被系统拦下）传 false，
-     *        重试只会变成一个永远在倒计时却永远失败的通知。
+     * @param cause 见 [FailureCause]。判定「不可重试」的门槛刻意收得很窄 ——
+     *        误判的代价是用户彻底失去自动恢复。
      */
-    private fun fail(message: String, detail: String? = null, retryable: Boolean = true) {
+    private fun fail(
+        message: String,
+        detail: String? = null,
+        cause: FailureCause = FailureCause.Unknown,
+    ) {
         failureStreak++
-        if (RetryPolicy.shouldRetry(failureStreak, retryable, autoRestartOnFailure)) {
+        if (RetryPolicy.shouldRetry(failureStreak, cause, autoRestartOnFailure)) {
             scheduleRetry(message)
             return
         }
 
-        // 彻底放弃。刻意**不**清运行意图：网络可能过一会儿就好了，
-        // 留着这一位，15 分钟后的看门狗还有一次机会。用户看到的是失败通知，
-        // 想彻底关掉按停止即可。
+        // 确定性错误要连运行意图一起清掉。留着那一位的话，看门狗每 15 分钟醒来一次、
+        // 失败一次、弹一次通知，而界面上因为状态不是 active，只有「启动」没有「停止」
+        // —— 用户根本按不到那个能让它安静下来的按钮。
+        //
+        // 次数耗尽（cause 是暂时性的）则相反：那一位要留着，网络说不定过一会儿就好了，
+        // 15 分钟后的看门狗还有一次机会。想彻底放弃的用户走
+        // [ProxyServiceController.stopAndForget]。
+        if (RetryPolicy.shouldForgetRunIntent(cause)) clearRunIntent()
+
         teardown()
         controller.updateTraffic(TrafficSnapshot())
         controller.updateState(ProxyState.Failed(message, detail))
@@ -648,9 +756,8 @@ class ProxyService : LifecycleService() {
         val delayMs = RetryPolicy.delayFor(failureStreak)
         Log.i(TAG, "$reason —— ${delayMs}ms 后第 $failureStreak 次重试")
 
-        // 只停内核，不动锁和前台状态
-        core.stop()
-        pacServer.stop()
+        // 只停内核与 PAC，不动锁和前台状态
+        shutdownDetached()
         trafficJob?.cancel()
         controller.updateState(ProxyState.Starting)
         statusOverride = getString(
@@ -675,7 +782,7 @@ class ProxyService : LifecycleService() {
                 throw e
             } catch (t: Throwable) {
                 Log.w(TAG, "重试失败", t)
-                fail("内核启动失败", t.message)
+                fail("内核启动失败", t.message, FailureCause.CoreStartFailed)
             }
         }
     }
@@ -720,12 +827,40 @@ class ProxyService : LifecycleService() {
         retryJob = null
         failureStreak = 0
 
-        pacServer.stop()
-        core.stop()
+        shutdownDetached()
+
         networkBinder.release()
         releaseLocks()
         runningConfig = null
+        lastNotified = null
         controller.updateConfigOutdated(false)
+    }
+
+    /**
+     * 关停内核与 PAC，且**保证跑完**。
+     *
+     * 三件事必须同时成立，缺一个就会留下孤儿内核 —— 服务已经没了，内核还在跑，
+     * 端口还占着，而没有任何对象持有它的引用，只能靠杀进程收场：
+     *
+     * 1. 用 [appScope] 而不是 `lifecycleScope`。[teardown] 的调用方全是同步路径
+     *    （`onDestroy`、`onStartCommand` 里的停止分支），而关停内核现在是挂起操作；
+     *    放进 lifecycleScope 里，紧随其后的 `stopSelf()` 会把它整个取消掉。
+     * 2. 用 [NonCancellable]。appScope 本身虽然不会被取消，但这一步的语义是
+     *    「无论如何都要做完」，把它写进上下文里比依赖外部约定可靠。
+     * 3. 用 [CoroutineStart.UNDISPATCHED]。**这一条不是为了快，是为了定序。**
+     *    [NiceCore.stop] 的第一件事就是抢那把互斥量，UNDISPATCHED 让这个动作发生在
+     *    本函数返回**之前**（互斥量空闲时 `lock()` 走的是不挂起的快路径，被占时则
+     *    立刻排进 FIFO 等待队列）。否则「用户飞快地按停止再按启动」时，后来的 start
+     *    完全可能抢在这次 stop 之前拿到锁，然后对着一个还没关掉的内核报端口占用。
+     *    正因如此，`core.stop()` 必须排在 `pacServer.stop()` 前面 —— 反过来的话，
+     *    抢锁这一步就被 PAC 的挂起点推到了另一个线程上，定序保证也就没了。
+     */
+    private fun shutdownDetached() {
+        appScope.launch(NonCancellable, start = CoroutineStart.UNDISPATCHED) {
+            core.stop().onFailure { Log.w(TAG, "内核关停时报错", it) }
+            runCatching { pacServer.stop() }
+                .onFailure { Log.w(TAG, "PAC 服务关停时报错", it) }
+        }
     }
 
     override fun onDestroy() {
@@ -753,6 +888,9 @@ class ProxyService : LifecycleService() {
                 "无权绑定该端口，请使用 1025 以上的端口"
             raw.contains("cannot assign requested address", ignoreCase = true) ->
                 "监听地址在当前网络下不存在，请改为 0.0.0.0"
+            // NiceCore 超时时抛的就是这句话。首次启动要下远程 rule-set，
+            // 弱网下卡满一分钟是最常见的成因。
+            raw.contains("内核启动超时") -> "内核启动超时，请检查网络后重试"
             else -> "内核启动失败"
         }
     }
@@ -762,12 +900,9 @@ class ProxyService : LifecycleService() {
      *         START_STICKY 的进程重建正好落在这个口子上，不接住就是一次崩溃。
      */
     private fun promoteToForeground(): Boolean {
-        val notification = notifications.build(
-            state = controller.state.value,
-            traffic = controller.traffic.value,
-            contentIntent = launchIntent(),
-            stopIntent = stopPendingIntent(this),
-        )
+        val content = notifications.content(controller.state.value, controller.traffic.value)
+        val notification = notifications.build(content, contentIntent, requireStopIntent())
+        lastNotified = content
         return runCatching {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
                 startForeground(
@@ -782,24 +917,28 @@ class ProxyService : LifecycleService() {
     }
 
     private fun refreshNotification() {
-        notifications.notify(
-            notifications.build(
-                state = controller.state.value,
-                traffic = controller.traffic.value,
-                contentIntent = launchIntent(),
-                stopIntent = stopPendingIntent(this),
-                statusText = statusOverride,
-            ),
+        val content = notifications.content(
+            state = controller.state.value,
+            traffic = controller.traffic.value,
+            statusText = statusOverride,
         )
+        // 内容一个字都没变的话，这次 notify 就只是一次白花的主线程 Binder 调用
+        if (content == lastNotified) return
+        lastNotified = content
+        notifications.notify(notifications.build(content, contentIntent, requireStopIntent()))
     }
+
+    /** [onCreate] 一定先于任何通知刷新执行，这里只是把可空性收掉。 */
+    private fun requireStopIntent(): PendingIntent =
+        stopIntent ?: stopPendingIntent(this).also { stopIntent = it }
 
     private fun launchIntent() =
         packageManager.getLaunchIntentForPackage(packageName)?.let { intent ->
-            android.app.PendingIntent.getActivity(
+            PendingIntent.getActivity(
                 this,
                 0,
                 intent,
-                android.app.PendingIntent.FLAG_IMMUTABLE,
+                PendingIntent.FLAG_IMMUTABLE,
             )
         }
 
@@ -881,10 +1020,19 @@ class ProxyService : LifecycleService() {
         private const val NETWORK_SETTLE_DELAY_MS = 2_000L
 
         /**
-         * 内核存活检查的间隔。读的是内存里的一个布尔量，几乎不花代价，
+         * 内核存活探测的间隔。一次回环 HTTP 请求，代价可以忽略，
          * 所以取一个「客户端还没来得及抱怨」的量级。
          */
         private const val HEALTH_CHECK_INTERVAL_MS = 10_000L
+
+        /**
+         * 连续这么多次探测不到才判定内核已死。
+         *
+         * 重启内核会断掉全屋设备的连接，为一次可能只是「刚好赶上系统卡了一下」的
+         * 超时付这个代价不划算。三次配合 10 秒间隔，最坏是半分钟才发现，
+         * 仍远快于看门狗那张 15 分钟的粗网。
+         */
+        private const val HEALTH_MISSES_BEFORE_REVIVE = 3
 
         /**
          * 内核活过这么久才算「稳住了」，之前累积的退避计数到此清零。

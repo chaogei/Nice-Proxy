@@ -103,12 +103,19 @@ fun NodeEditScreen(
                 }
             }
 
+            // 这里原来是一组「或手动填写」的输入框，但新建路径根本没有保存按钮，
+            // 用户认真填完找不到提交入口，返回后全丢。与其留一个填了也没用的表单，
+            // 不如说清楚为什么只收链接：ServerProfile 还需要协议类型与凭据，
+            // 而那些字段只有分享链接、二维码或订阅里才带得全。
             Text(
-                text = "或手动填写",
-                style = MaterialTheme.typography.labelMedium,
+                text = "暂不支持逐项手填：一个可用的节点还需要协议类型、加密方式与凭据，" +
+                    "这些只有分享链接、二维码或机场订阅里才带得全。\n" +
+                    "没有链接的话，可以回节点页用右上角的扫码或添加订阅。",
+                style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(start = 4.dp),
             )
+            return@Column
         }
 
         GlassPanel(
@@ -161,14 +168,12 @@ fun NodeEditScreen(
             )
         }
 
-        if (!state.isNew) {
-            Button(
-                onClick = viewModel::save,
-                enabled = state.canSave,
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                Text("保存")
-            }
+        Button(
+            onClick = viewModel::save,
+            enabled = state.canSave,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Text("保存")
         }
     }
 }

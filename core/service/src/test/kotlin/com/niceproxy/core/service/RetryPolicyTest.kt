@@ -71,11 +71,12 @@ internal class RetryPolicyTest {
     inner class Decision {
 
         @Test
-        @DisplayName("在上限内的可重试失败才重试")
+        @DisplayName("在上限内的暂时性失败才重试")
         fun retriesWithinLimit() {
             (1..RetryPolicy.MAX_ATTEMPTS).forEach { attempt ->
-                assertThat(RetryPolicy.shouldRetry(attempt, retryable = true, enabled = true))
-                    .isTrue()
+                assertThat(
+                    RetryPolicy.shouldRetry(attempt, FailureCause.CoreStartFailed, enabled = true),
+                ).isTrue()
             }
         }
 
@@ -85,7 +86,7 @@ internal class RetryPolicyTest {
             assertThat(
                 RetryPolicy.shouldRetry(
                     RetryPolicy.MAX_ATTEMPTS + 1,
-                    retryable = true,
+                    FailureCause.CoreStartFailed,
                     enabled = true,
                 ),
             ).isFalse()
@@ -96,13 +97,57 @@ internal class RetryPolicyTest {
         fun neverRetriesDeterministicFailures() {
             // 配置不合法、被后台启动限制拦下这类错误，重试多少次都是同样的结果，
             // 只会让用户盯着一个永远在倒计时却永远失败的通知
-            assertThat(RetryPolicy.shouldRetry(1, retryable = false, enabled = true)).isFalse()
+            assertThat(RetryPolicy.shouldRetry(1, FailureCause.InvalidConfig, enabled = true))
+                .isFalse()
+            assertThat(
+                RetryPolicy.shouldRetry(1, FailureCause.ForegroundStartBlocked, enabled = true),
+            ).isFalse()
         }
 
         @Test
         @DisplayName("用户关掉自动重启后完全不重试")
         fun respectsUserSetting() {
-            assertThat(RetryPolicy.shouldRetry(1, retryable = true, enabled = false)).isFalse()
+            assertThat(RetryPolicy.shouldRetry(1, FailureCause.CoreStartFailed, enabled = false))
+                .isFalse()
+        }
+    }
+
+    @Nested
+    @DisplayName("确定性成因的白名单")
+    inner class DeterministicWhitelist {
+
+        @Test
+        @DisplayName("只有明确列入的两种才算确定性")
+        fun onlyWhitelisted() {
+            // 误判成确定性的代价是用户彻底失去自动恢复：不再退避重试，运行意图也被清掉，
+            // 看门狗都不会再来救。所以这份名单必须由断言钉死，不能靠调用点随手传布尔值。
+            val deterministic = FailureCause.entries.filter { it.deterministic }.toSet()
+
+            assertThat(deterministic).containsExactly(
+                FailureCause.InvalidConfig,
+                FailureCause.ForegroundStartBlocked,
+            )
+        }
+
+        @Test
+        @DisplayName("分不清成因时按暂时性处理")
+        fun unknownIsTransient() {
+            assertThat(FailureCause.Unknown.deterministic).isFalse()
+            assertThat(RetryPolicy.shouldRetry(1, FailureCause.Unknown, enabled = true)).isTrue()
+        }
+
+        @Test
+        @DisplayName("只有确定性错误才连运行意图一起清掉")
+        fun forgetsRunIntentOnlyWhenDeterministic() {
+            // 次数耗尽属于「试过了、暂时不行」，那一位要留着 —— 网络说不定过一会儿
+            // 就好了，15 分钟后的看门狗还有一次机会
+            assertThat(RetryPolicy.shouldForgetRunIntent(FailureCause.InvalidConfig)).isTrue()
+            assertThat(RetryPolicy.shouldForgetRunIntent(FailureCause.ForegroundStartBlocked))
+                .isTrue()
+            assertThat(RetryPolicy.shouldForgetRunIntent(FailureCause.CoreStartFailed)).isFalse()
+            assertThat(RetryPolicy.shouldForgetRunIntent(FailureCause.CoreExitedRepeatedly))
+                .isFalse()
+            assertThat(RetryPolicy.shouldForgetRunIntent(FailureCause.Unknown)).isFalse()
         }
     }
 

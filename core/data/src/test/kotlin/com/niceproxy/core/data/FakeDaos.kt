@@ -1,5 +1,6 @@
 package com.niceproxy.core.data
 
+import com.niceproxy.core.database.TransactionRunner
 import com.niceproxy.core.database.dao.InboundDao
 import com.niceproxy.core.database.dao.RoutingDao
 import com.niceproxy.core.database.dao.ServerDao
@@ -15,18 +16,56 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
 
-/**
+/*
  * 手写的内存 DAO，用来把 Repository 的判断逻辑放进普通 JUnit 里跑。
  *
  * 不引 Robolectric、不起真 Room：这几个 Repository 里值得测的东西
  * （判重、保留未测速节点、恢复顺序）都是纯逻辑，为它们拉起一整个
  * Android 运行时只会让测试慢上两个数量级。
  *
- * 但排序与外键这两件事必须照着真实 DAO 复刻 —— 逻辑正是依赖它们的：
+ * 但排序、外键、事务这三件事必须照着真实 DAO 复刻 —— 逻辑正是依赖它们的：
  * 判重靠 `getAll()` 的稳定顺序决定保留哪一条，备份恢复靠外键约束
- * 才能暴露「分组必须先于节点写入」这个要求。
+ * 才能暴露「分组必须先于节点写入」这个要求，靠事务回滚才能验证
+ * 「中途失败不会把用户数据清空」。
  */
-internal class FakeServerGroupDao : ServerGroupDao {
+
+/**
+ * 能被整体快照与回滚的内存存储。
+ *
+ * 存在的唯一目的是让 [FakeTransactionRunner] 有东西可回滚。
+ */
+internal interface InMemoryStore {
+    /** 记下当前内容，返回一个把它原样写回去的动作。 */
+    fun capture(): () -> Unit
+}
+
+/**
+ * 事务的测试替身：[block] 抛异常就把所有 fake DAO 的内容恢复到进入前。
+ *
+ * 真实的原子性由 Room 保证，这里复刻的是**语义**，用来钉住调用方确实把
+ * 整段写操作放进了事务里 —— 而这一点恰恰是 `BackupRepository.restore`
+ * 里最要命的一条：它先删后插，中途失败就是用户全部数据清零。
+ */
+internal class FakeTransactionRunner(
+    private val stores: List<InMemoryStore>,
+) : TransactionRunner {
+
+    var transactionCount: Int = 0
+        private set
+
+    override suspend fun <R> withTransaction(block: suspend () -> R): R {
+        transactionCount++
+        val undo = stores.map { it.capture() }
+        return try {
+            block()
+        } catch (t: Throwable) {
+            undo.forEach { it() }
+            throw t
+        }
+    }
+}
+
+internal class FakeServerGroupDao : ServerGroupDao, InMemoryStore {
 
     private val items = MutableStateFlow<List<ServerGroupEntity>>(emptyList())
 
@@ -54,11 +93,18 @@ internal class FakeServerGroupDao : ServerGroupDao {
 
     override suspend fun count(): Int = items.value.size
 
+    override fun capture(): () -> Unit {
+        val saved = items.value
+        return { items.value = saved }
+    }
+
     /** 模拟 servers 表上的 ON DELETE CASCADE。 */
     var cascade: (suspend (String) -> Unit)? = null
 }
 
-internal class FakeServerDao(private val groups: FakeServerGroupDao? = null) : ServerDao {
+internal class FakeServerDao(
+    private val groups: FakeServerGroupDao? = null,
+) : ServerDao, InMemoryStore {
 
     private val items = MutableStateFlow<List<ServerEntity>>(emptyList())
 
@@ -111,12 +157,17 @@ internal class FakeServerDao(private val groups: FakeServerGroupDao? = null) : S
         items.update { current -> current.map { it.copy(latencyMs = null, lastTestedAt = null) } }
     }
 
+    override fun capture(): () -> Unit {
+        val saved = items.value
+        return { items.value = saved }
+    }
+
     /** 单条删除的调用次数，用来观察批量操作的写放大。 */
     var deleteCount: Int = 0
         private set
 }
 
-internal class FakeInboundDao : InboundDao {
+internal class FakeInboundDao : InboundDao, InMemoryStore {
 
     private val items = MutableStateFlow<List<InboundEntity>>(emptyList())
 
@@ -150,9 +201,14 @@ internal class FakeInboundDao : InboundDao {
     }
 
     override suspend fun count(): Int = items.value.size
+
+    override fun capture(): () -> Unit {
+        val saved = items.value
+        return { items.value = saved }
+    }
 }
 
-internal class FakeRoutingDao : RoutingDao {
+internal class FakeRoutingDao : RoutingDao, InMemoryStore {
 
     private val ruleStore = MutableStateFlow<List<RoutingRuleEntity>>(emptyList())
     private val ruleSetStore = MutableStateFlow<List<RuleSetEntity>>(emptyList())
@@ -196,5 +252,14 @@ internal class FakeRoutingDao : RoutingDao {
 
     override suspend fun deleteUnlockedRules() {
         ruleStore.update { current -> current.filter { it.locked } }
+    }
+
+    override fun capture(): () -> Unit {
+        val savedRules = ruleStore.value
+        val savedRuleSets = ruleSetStore.value
+        return {
+            ruleStore.value = savedRules
+            ruleSetStore.value = savedRuleSets
+        }
     }
 }

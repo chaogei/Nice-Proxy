@@ -6,6 +6,7 @@ import androidx.hilt.work.HiltWorkerFactory
 import androidx.work.Configuration
 import com.niceproxy.core.common.ApplicationScope
 import com.niceproxy.core.data.InboundRepository
+import com.niceproxy.core.database.health.CredentialHealth
 import com.niceproxy.core.datastore.SettingsDataStore
 import com.niceproxy.core.service.ProxyServiceController
 import com.niceproxy.core.service.work.ProxyWatchdogScheduler
@@ -25,6 +26,7 @@ class NiceProxyApplication : Application(), Configuration.Provider {
     @Inject lateinit var watchdogScheduler: ProxyWatchdogScheduler
     @Inject lateinit var settings: SettingsDataStore
     @Inject lateinit var controller: ProxyServiceController
+    @Inject lateinit var credentialHealth: CredentialHealth
 
     @Inject
     @ApplicationScope
@@ -44,7 +46,25 @@ class NiceProxyApplication : Application(), Configuration.Provider {
             inboundRepository.ensureDefaults()
         }
         subscriptionScheduler.ensureScheduled()
+        probeCredentialEncryption()
         recoverIfKilled()
+    }
+
+    /**
+     * 主动探一次凭据加密是否还工作得了。
+     *
+     * 不探的话这个状态位要等到用户保存第一个节点、加密真的失败时才翻转 ——
+     * 而那时第一份明文凭据已经落盘，提示晚了一步。首页在等这个值。
+     *
+     * 放在 applicationScope（Default 调度器）上：探测会走一次到 keystore2
+     * 守护进程的 binder 往返，不能占主线程。
+     */
+    private fun probeCredentialEncryption() {
+        applicationScope.launch {
+            runCatching { credentialHealth.probe() }
+                .onSuccess { degraded -> if (degraded) Log.w(TAG, "凭据加密不可用，正在明文落盘") }
+                .onFailure { Log.w(TAG, "凭据加密探测失败", it) }
+        }
     }
 
     /**

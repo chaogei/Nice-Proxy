@@ -17,6 +17,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
@@ -26,9 +27,13 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.Role
@@ -48,9 +53,33 @@ fun InboundEditScreen(
     viewModel: InboundEditViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
+    var confirmDelete by remember { mutableStateOf(false) }
 
     LaunchedEffect(state.saved) {
         if (state.saved) onNavigateBack()
+    }
+
+    // 删掉入站等于把这个端口上的所有客户端一起踢下线，而按钮就在返回箭头旁边
+    if (confirmDelete) {
+        AlertDialog(
+            onDismissRequest = { confirmDelete = false },
+            title = { Text("删除入站") },
+            text = {
+                Text(
+                    "「${state.type.displayName} · ${state.portText}」将被删除。" +
+                        "正指着这个端口的设备会立刻失去代理，此操作不可撤销。",
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmDelete = false
+                    viewModel.delete()
+                }) { Text("删除") }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmDelete = false }) { Text("取消") }
+            },
+        )
     }
 
     Column(
@@ -78,7 +107,7 @@ fun InboundEditScreen(
                 modifier = Modifier.weight(1f),
             )
             if (!state.isNew) {
-                IconButton(onClick = viewModel::delete) {
+                IconButton(onClick = { confirmDelete = true }) {
                     Icon(
                         Icons.Default.Delete,
                         contentDescription = "删除",

@@ -4,6 +4,7 @@ import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.emptyPreferences
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import com.niceproxy.core.model.ClashApiSettings
@@ -15,8 +16,10 @@ import com.niceproxy.core.model.OutboundSettings
 import com.niceproxy.core.model.RoutingMode
 import com.niceproxy.core.model.ServiceSettings
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
+import java.io.IOException
 import java.security.SecureRandom
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -26,19 +29,23 @@ class SettingsDataStore @Inject constructor(
     private val dataStore: DataStore<Preferences>,
 ) {
 
-    val serviceSettings: Flow<ServiceSettings> = dataStore.data.map { prefs ->
-        ServiceSettings(
-            autoStartOnBoot = prefs[Keys.AUTO_START_ON_BOOT] ?: false,
-            startOnAppLaunch = prefs[Keys.START_ON_LAUNCH] ?: false,
-            powerSave = prefs[Keys.POWER_SAVE] ?: false,
-            keepWifiAwake = prefs[Keys.KEEP_WIFI_AWAKE] ?: true,
-            networkPreference = prefs[Keys.NETWORK_PREFERENCE]
-                ?.let { runCatching { NetworkPreference.valueOf(it) }.getOrNull() }
-                ?: NetworkPreference.AUTO,
-            ipv6Enabled = prefs[Keys.IPV6_ENABLED] ?: true,
-            autoRestartOnFailure = prefs[Keys.AUTO_RESTART] ?: true,
-        )
+    /**
+     * 所有读取都走这里，不直接用 `dataStore.data`。
+     *
+     * `corruptionHandler` 只覆盖「文件解析不出来」，读取时的 I/O 错误
+     * （磁盘满、权限、存储被卸载）依然会让流失败，而下游没有一个地方接得住：
+     * `ConfigRepository` 会 `first()` 一下，抛出来就意味着代理起不来；
+     * 设置页会直接崩。这些设置全都可重建，退回默认值比让整个应用不可用好。
+     *
+     * `catch` 里 emit 一次之后流就结束了，也就是说出错以后这条流不再推送
+     * 更新 —— 这是 `catch` 的语义，也是可以接受的：拿到一份默认值继续跑，
+     * 好过整条链路断掉。
+     */
+    private val preferences: Flow<Preferences> = dataStore.data.catch { cause ->
+        if (cause is IOException) emit(emptyPreferences()) else throw cause
     }
+
+    val serviceSettings: Flow<ServiceSettings> = preferences.map { readServiceSettings(it) }
 
     /**
      * 代理**应当**处于运行状态。这不是用户设置，是服务自己记的运行意图。
@@ -50,21 +57,15 @@ class SettingsDataStore @Inject constructor(
      *
      * 只有用户显式停止、省电模式停机、以及开机时未启用自启这三种情况会置 false。
      */
-    val shouldBeRunning: Flow<Boolean> = dataStore.data.map { it[Keys.SHOULD_BE_RUNNING] ?: false }
+    val shouldBeRunning: Flow<Boolean> = preferences.map { it[Keys.SHOULD_BE_RUNNING] ?: false }
 
     suspend fun setShouldBeRunning(value: Boolean) {
         dataStore.edit { it[Keys.SHOULD_BE_RUNNING] = value }
     }
 
-    val dnsSettings: Flow<DnsSettings> = dataStore.data.map { prefs ->
-        DnsSettings(
-            remoteServer = prefs[Keys.DNS_REMOTE] ?: DnsSettings().remoteServer,
-            localServer = prefs[Keys.DNS_LOCAL] ?: DnsSettings().localServer,
-            strategy = prefs[Keys.DNS_STRATEGY] ?: DnsSettings().strategy,
-        )
-    }
+    val dnsSettings: Flow<DnsSettings> = preferences.map { readDnsSettings(it) }
 
-    val logSettings: Flow<LogSettings> = dataStore.data.map { prefs ->
+    val logSettings: Flow<LogSettings> = preferences.map { prefs ->
         LogSettings(
             level = prefs[Keys.LOG_LEVEL]
                 ?.let { runCatching { LogLevel.valueOf(it) }.getOrNull() }
@@ -72,7 +73,7 @@ class SettingsDataStore @Inject constructor(
         )
     }
 
-    val outboundSettings: Flow<OutboundSettings> = dataStore.data.map { prefs ->
+    val outboundSettings: Flow<OutboundSettings> = preferences.map { prefs ->
         val default = OutboundSettings()
         OutboundSettings(
             selectedTag = prefs[Keys.SELECTED_OUTBOUND] ?: default.selectedTag,
@@ -82,7 +83,7 @@ class SettingsDataStore @Inject constructor(
         )
     }
 
-    val routingMode: Flow<RoutingMode> = dataStore.data.map { prefs ->
+    val routingMode: Flow<RoutingMode> = preferences.map { prefs ->
         prefs[Keys.ROUTING_MODE]
             ?.let { runCatching { RoutingMode.valueOf(it) }.getOrNull() }
             ?: RoutingMode.BYPASS_MAINLAND
@@ -100,19 +101,27 @@ class SettingsDataStore @Inject constructor(
         dataStore.edit { it[Keys.URLTEST_URL] = url }
     }
 
+    /**
+     * 变换必须发生在 `edit` **内部**，从 `prefs` 现读现改。
+     *
+     * 先 `first()` 读、在外面算好、再整体写回，是同一个反模式在
+     * [clashApiSettings] 里已经批判过的那个：DataStore 只串行化 `edit` 里的
+     * transform，两次调用在外面各自基于同一份旧值计算，后写的会把先写的
+     * 整片覆盖掉。用户快速连着切两个开关，其中一个就静默弹回去了。
+     */
     suspend fun updateDnsSettings(transform: (DnsSettings) -> DnsSettings) {
-        val updated = transform(dnsSettings.first())
         dataStore.edit { prefs ->
+            val updated = transform(readDnsSettings(prefs))
             prefs[Keys.DNS_REMOTE] = updated.remoteServer
             prefs[Keys.DNS_LOCAL] = updated.localServer
             prefs[Keys.DNS_STRATEGY] = updated.strategy
         }
     }
 
+    /** 同 [updateDnsSettings]，变换在事务内进行。 */
     suspend fun updateServiceSettings(transform: (ServiceSettings) -> ServiceSettings) {
-        val current = serviceSettings.first()
-        val updated = transform(current)
         dataStore.edit { prefs ->
+            val updated = transform(readServiceSettings(prefs))
             prefs[Keys.AUTO_START_ON_BOOT] = updated.autoStartOnBoot
             prefs[Keys.START_ON_LAUNCH] = updated.startOnAppLaunch
             prefs[Keys.POWER_SAVE] = updated.powerSave
@@ -122,6 +131,24 @@ class SettingsDataStore @Inject constructor(
             prefs[Keys.AUTO_RESTART] = updated.autoRestartOnFailure
         }
     }
+
+    private fun readServiceSettings(prefs: Preferences) = ServiceSettings(
+        autoStartOnBoot = prefs[Keys.AUTO_START_ON_BOOT] ?: false,
+        startOnAppLaunch = prefs[Keys.START_ON_LAUNCH] ?: false,
+        powerSave = prefs[Keys.POWER_SAVE] ?: false,
+        keepWifiAwake = prefs[Keys.KEEP_WIFI_AWAKE] ?: true,
+        networkPreference = prefs[Keys.NETWORK_PREFERENCE]
+            ?.let { runCatching { NetworkPreference.valueOf(it) }.getOrNull() }
+            ?: NetworkPreference.AUTO,
+        ipv6Enabled = prefs[Keys.IPV6_ENABLED] ?: true,
+        autoRestartOnFailure = prefs[Keys.AUTO_RESTART] ?: true,
+    )
+
+    private fun readDnsSettings(prefs: Preferences) = DnsSettings(
+        remoteServer = prefs[Keys.DNS_REMOTE] ?: DnsSettings().remoteServer,
+        localServer = prefs[Keys.DNS_LOCAL] ?: DnsSettings().localServer,
+        strategy = prefs[Keys.DNS_STRATEGY] ?: DnsSettings().strategy,
+    )
 
     suspend fun setLogLevel(level: LogLevel) {
         dataStore.edit { it[Keys.LOG_LEVEL] = level.name }
@@ -140,7 +167,7 @@ class SettingsDataStore @Inject constructor(
      * 只是把成本转嫁给每次启动，换不到任何实际防护。
      */
     suspend fun clashApiSettings(): ClashApiSettings {
-        readClashApiSettings(dataStore.data.first())?.let { return it }
+        readClashApiSettings(preferences.first())?.let { return it }
 
         // 生成路径必须整个塞进 edit：DataStore 会串行化 transform，
         // 而「先 read 再 edit」在并发下会让两个调用各生成一份 secret，

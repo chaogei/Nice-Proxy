@@ -1,5 +1,6 @@
 package com.niceproxy.feature.monitor
 
+import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.compose.foundation.layout.Arrangement
@@ -41,6 +42,7 @@ import com.niceproxy.core.network.clash.ClashApiClient
 import com.niceproxy.core.network.clash.ConnectionInfo
 import com.niceproxy.core.service.ProxyServiceController
 import com.niceproxy.core.service.ProxyState
+import com.niceproxy.util.describe
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -56,6 +58,13 @@ data class MonitorUiState(
     val totalUpload: Long = 0,
     val totalDownload: Long = 0,
     val running: Boolean = false,
+    /**
+     * 订阅断了而内核还在跑。
+     *
+     * 必须和「真的没有连接」区分开：两者在界面上都是一张空列表，
+     * 而用户会据此判断代理到底通没通。
+     */
+    val streamError: String? = null,
 )
 
 @HiltViewModel
@@ -74,12 +83,26 @@ class MonitorViewModel @Inject constructor(
         viewModelScope.launch(Dispatchers.Default) {
             controller.state.collectLatest { state ->
                 val running = state is ProxyState.Running
-                _uiState.value = _uiState.value.copy(running = running)
+                // 重新订阅时清掉上一轮的断流提示，否则内核重启之后它会一直挂着
+                _uiState.value = _uiState.value.copy(running = running, streamError = null)
                 if (!running) return@collectLatest
 
                 val api = settings.clashApiSettings()
                 clashApi.connections(api)
-                    .catch { /* 内核停止导致的断流是正常路径 */ }
+                    // 空 catch 是 README 记过的坑：代理正常跑着，页面永远「暂无活动
+                    // 连接」，而日志里什么都没有。内核停止导致的断流确实是正常路径，
+                    // 但那要和真正的异常分开处理，不能一起吞掉。
+                    .catch { error ->
+                        if (controller.state.value is ProxyState.Running) {
+                            Log.w(TAG, "连接订阅中断，内核仍在运行", error)
+                            _uiState.value = _uiState.value.copy(
+                                streamError = "监控数据已断开（${error.describe()}），" +
+                                    "代理本身可能仍在正常工作。重开本页可重试。",
+                            )
+                        } else {
+                            Log.d(TAG, "内核已停止，连接订阅正常结束")
+                        }
+                    }
                     .collect { snapshot ->
                         _uiState.value = MonitorUiState(
                             // 流量大的排前面，用户关心的是「谁在占带宽」
@@ -99,6 +122,10 @@ class MonitorViewModel @Inject constructor(
         viewModelScope.launch {
             clashApi.closeConnection(settings.clashApiSettings(), id)
         }
+    }
+
+    private companion object {
+        const val TAG = "MonitorViewModel"
     }
 }
 
@@ -148,6 +175,15 @@ fun MonitorScreen(
                 modifier = Modifier.padding(16.dp),
             )
             return@Column
+        }
+
+        state.streamError?.let { error ->
+            Text(
+                text = error,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+            )
         }
 
         // 整个列表共用一块毛玻璃。每行一块的话，同屏十几个连接就是十几个
@@ -210,7 +246,7 @@ private fun ConnectionRow(connection: ConnectionInfo, onClose: () -> Unit) {
             )
         }
         Spacer(Modifier.width(8.dp))
-        IconButton(onClick = onClose, modifier = Modifier.size(32.dp)) {
+        IconButton(onClick = onClose) {
             Icon(
                 Icons.Default.Close,
                 contentDescription = "断开",

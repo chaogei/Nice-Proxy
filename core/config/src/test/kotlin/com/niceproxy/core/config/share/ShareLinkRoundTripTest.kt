@@ -161,7 +161,9 @@ class ShareLinkRoundTripTest {
         assertThat(params.obfsPassword).isEqualTo("ob-pw")
         // 导出时写成 20000-30000，解析回来要还原成 sing-box 的冒号写法
         assertThat(params.serverPorts).containsExactly("20000:30000")
-        assertThat(parsed.tls?.insecure).isTrue()
+        // insecure 是唯一刻意不做往返的字段：链接是外部输入，解析侧一律不采信
+        // 「关掉证书校验」的要求，只允许用户在节点编辑页手动开启
+        assertThat(parsed.tls?.insecure).isFalse()
     }
 
     @Test

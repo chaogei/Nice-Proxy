@@ -1,6 +1,7 @@
 package com.niceproxy.core.config
 
 import com.niceproxy.core.model.ClashApiSettings
+import com.niceproxy.core.model.CredentialState
 import com.niceproxy.core.model.InboundAuth
 import com.niceproxy.core.model.InboundService
 import com.niceproxy.core.model.InboundType
@@ -102,6 +103,23 @@ internal object Fixtures {
         params = ProtocolParams.VMess(uuid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"),
         transport = TransportConfig.WebSocket(path = "/ws", headers = mapOf("Host" to "vm.example.com")),
         tls = TlsConfig(enabled = true, serverName = "vm.example.com"),
+    )
+
+    /**
+     * 凭据解不开的节点，形状与 `ServerEntity.toDomain()` 的降级结果一致：
+     * 参数被换成一个一定构建失败的占位符，其余字段（含 TLS）原样保留 ——
+     * 只有 params 那一列是加密的。
+     */
+    fun unreadableCredentials(id: String = "dead") = ServerProfile(
+        id = id,
+        groupId = "g1",
+        name = "香港 01",
+        protocol = ProxyProtocol.TROJAN,
+        server = "hk.example.com",
+        serverPort = 443,
+        params = ProtocolParams.Trojan(password = ""),
+        tls = TlsConfig(enabled = true, serverName = "hk.example.com"),
+        credentialState = CredentialState.UNREADABLE,
     )
 
     fun shadowsocks(id: String = "ss") = ServerProfile(

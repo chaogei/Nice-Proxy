@@ -7,6 +7,7 @@ import com.niceproxy.core.config.internal.putIfNotBlank
 import com.niceproxy.core.config.internal.putIfNotEmpty
 import com.niceproxy.core.config.internal.putIfNotNull
 import com.niceproxy.core.config.internal.putIfTrue
+import com.niceproxy.core.model.CredentialState
 import com.niceproxy.core.model.InboundService
 import com.niceproxy.core.model.RoutingRule
 import com.niceproxy.core.model.RuleAction
@@ -45,6 +46,10 @@ class SingBoxConfigBuilder(
 
         val warnings = mutableListOf<ConfigError>()
         val nodes = buildNodeOutbounds(input, warnings)
+        if (nodes.isEmpty() && input.nodes.isNotEmpty()) {
+            return ConfigResult.Failure(noUsableNodeErrors(input, warnings))
+        }
+        // 走到这里只剩两种局面：有可用节点，或者用户一个节点都没配（纯中继）。
         val hasProxy = nodes.isNotEmpty()
 
         // 规则集与规则要先一起收敛完再往下走：规则能引用哪些 rule_set、
@@ -177,6 +182,27 @@ class SingBoxConfigBuilder(
 
     // ---------------------------------------------------------------- 校验
 
+    /**
+     * 「配了节点但一个都用不了」必须 fail-closed，理由见 [ConfigError.NoUsableNode]。
+     *
+     * 与 core/database 的 `InboundEntity.toDomain`「一个用不了的入站远好过一个
+     * 敞开的入站」是同一条原则：宁可给出一个有明确指向的失败，也不要一份
+     * 悄悄放行的配置。
+     */
+    private fun noUsableNodeErrors(
+        input: ConfigInput,
+        nodeWarnings: List<ConfigError>,
+    ): List<ConfigError> {
+        val summary = ConfigError.NoUsableNode(
+            configuredCount = input.nodes.size,
+            unreadableCount = input.nodes.count { it.credentialState == CredentialState.UNREADABLE },
+        )
+        // 明细只带前几条：密钥失效是全局的，整张表会同时解不开，几千条同因的
+        // InvalidNode 拼进错误文案（ProxyService 把 errors 直接 join 进通知）
+        // 只会把提示撑爆，而它们说的是同一件事。
+        return listOf(summary) + nodeWarnings.take(MAX_REPORTED_INVALID_NODES)
+    }
+
     private fun validate(input: ConfigInput): List<ConfigError> {
         val errors = mutableListOf<ConfigError>()
         val enabled = input.inbounds.filter { it.enabled }
@@ -305,7 +331,12 @@ class SingBoxConfigBuilder(
             .sortedBy { it.sortOrder }
             .mapNotNull { node ->
                 when (val result = factory.create(node)) {
-                    is OutboundResult.Ok -> NodeOutbound(node.outboundTag, result.json)
+                    is OutboundResult.Ok -> {
+                        if (result.insecureTls) {
+                            warnings += ConfigError.InsecureTls(node.id, node.name)
+                        }
+                        NodeOutbound(node.outboundTag, result.json)
+                    }
                     is OutboundResult.Invalid -> {
                         warnings += ConfigError.InvalidNode(node.id, node.name, result.reason)
                         null
@@ -531,6 +562,9 @@ class SingBoxConfigBuilder(
         const val DNS_LOCAL = "dns-local"
         const val SNIFF_TIMEOUT = "300ms"
         const val DEFAULT_UDP_TIMEOUT = "5m"
+
+        /** 构建失败时随摘要一起给出的节点级明细条数上限。 */
+        const val MAX_REPORTED_INVALID_NODES = 3
 
         /** DNS 分流时视为「国内」的规则集 tag。 */
         val DOMESTIC_RULE_SET_TAGS = setOf("geosite-cn", "geosite-geolocation-cn")

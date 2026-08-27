@@ -1,6 +1,5 @@
 package com.niceproxy.feature.nodes
 
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -28,11 +27,13 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.ContentPaste
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.RssFeed
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
@@ -55,9 +56,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalClipboardManager
-import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -72,6 +74,7 @@ import com.niceproxy.core.model.GroupType
 import com.niceproxy.core.model.ServerGroup
 import com.niceproxy.core.model.ServerProfile
 import com.niceproxy.core.model.WellKnownTag
+import com.niceproxy.util.copyToClipboard
 
 @Composable
 fun NodesScreen(
@@ -86,10 +89,13 @@ fun NodesScreen(
     val message by viewModel.message.collectAsStateWithLifecycle()
     val shareTarget by viewModel.shareTarget.collectAsStateWithLifecycle()
     val clipboard = LocalClipboardManager.current
+    val context = LocalContext.current
 
     var showSubscriptionDialog by remember { mutableStateOf(false) }
     var showOverflow by remember { mutableStateOf(false) }
     var pendingDeleteGroup by remember { mutableStateOf<ServerGroup?>(null) }
+    var pendingDeleteNode by remember { mutableStateOf<ServerProfile?>(null) }
+    var pendingBulkDelete by remember { mutableStateOf<BulkDelete?>(null) }
     var banner by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(message) {
@@ -143,20 +149,15 @@ fun NodesScreen(
                         expanded = showOverflow,
                         onDismissRequest = { showOverflow = false },
                     ) {
-                        DropdownMenuItem(
-                            text = { Text("删除重复节点") },
-                            onClick = {
-                                viewModel.deleteDuplicates()
-                                showOverflow = false
-                            },
-                        )
-                        DropdownMenuItem(
-                            text = { Text("删除测速失败的节点") },
-                            onClick = {
-                                viewModel.deleteInvalid()
-                                showOverflow = false
-                            },
-                        )
+                        BulkDelete.entries.forEach { action ->
+                            DropdownMenuItem(
+                                text = { Text(action.label) },
+                                onClick = {
+                                    pendingBulkDelete = action
+                                    showOverflow = false
+                                },
+                            )
+                        }
                     }
                 }
             }
@@ -315,7 +316,7 @@ fun NodesScreen(
                     onSelect = { viewModel.selectNode(node.outboundTag) },
                     onEdit = { onEditNode(node.id) },
                     onShare = { viewModel.share(node) },
-                    onDelete = { viewModel.deleteNode(node.id) },
+                    onDelete = { pendingDeleteNode = node },
                 )
             }
         }
@@ -350,7 +351,14 @@ fun NodesScreen(
             },
             confirmButton = {
                 Button(onClick = {
-                    clipboard.setText(AnnotatedString(target.link))
+                    // 分享链接里带着节点密码，Android 13+ 的剪贴板预览浮层
+                    // 会把它明文渲染在屏幕上
+                    context.copyToClipboard(
+                        label = target.name,
+                        text = target.link,
+                        sensitive = true,
+                    )
+                    banner = "已复制分享链接"
                     viewModel.dismissShare()
                 }) { Text("复制链接") }
             },
@@ -376,6 +384,63 @@ fun NodesScreen(
             },
         )
     }
+
+    // 删除分组一直有确认，删除单个节点却没有 —— 说明这是漏了，不是设计决定。
+    // 手动导入的节点删掉之后没有任何找回途径。
+    pendingDeleteNode?.let { node ->
+        AlertDialog(
+            onDismissRequest = { pendingDeleteNode = null },
+            title = { Text("删除节点") },
+            text = {
+                Text(
+                    "「${node.name}」（${node.server}:${node.serverPort}）将被删除，" +
+                        "此操作不可撤销。",
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    viewModel.deleteNode(node.id)
+                    pendingDeleteNode = null
+                }) { Text("删除") }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingDeleteNode = null }) { Text("取消") }
+            },
+        )
+    }
+
+    pendingBulkDelete?.let { action ->
+        AlertDialog(
+            onDismissRequest = { pendingBulkDelete = null },
+            title = { Text(action.label) },
+            text = { Text(action.confirmMessage) },
+            confirmButton = {
+                TextButton(onClick = {
+                    when (action) {
+                        BulkDelete.DUPLICATES -> viewModel.deleteDuplicates()
+                        BulkDelete.INVALID -> viewModel.deleteInvalid()
+                    }
+                    pendingBulkDelete = null
+                }) { Text("删除") }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingBulkDelete = null }) { Text("取消") }
+            },
+        )
+    }
+}
+
+/** 一次删掉一批节点的两个入口，都不可撤销，都必须先问一句。 */
+private enum class BulkDelete(val label: String, val confirmMessage: String) {
+    DUPLICATES(
+        label = "删除重复节点",
+        confirmMessage = "地址与端口相同的节点只保留一个。此操作不可撤销。",
+    ),
+    INVALID(
+        label = "删除测速失败的节点",
+        confirmMessage = "上次测速超时或失败的节点会被全部删除。测速结果受当时网络状况影响，" +
+            "换个网络可能就通了。此操作不可撤销。",
+    ),
 }
 
 @Composable
@@ -508,6 +573,7 @@ private fun NodeRow(
     onDelete: () -> Unit,
 ) {
     val unreadable = node.credentialState == CredentialState.UNREADABLE
+    var menuOpen by remember { mutableStateOf(false) }
     GlassPanel(
         hazeState = LocalHazeState.current,
         modifier = Modifier.fillMaxWidth(),
@@ -519,10 +585,13 @@ private fun NodeRow(
             ProtocolBadge(node.protocol.badge)
             Spacer(Modifier.width(12.dp))
             Column(modifier = Modifier.weight(1f)) {
+                // 右侧换成 48dp 的按钮之后名字能占的宽度变窄了，
+                // 截断要有省略号，不能直接切在半个字上
                 Text(
                     text = node.name,
                     style = MaterialTheme.typography.titleSmall,
                     maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
                 if (unreadable) {
                     Text(
@@ -538,12 +607,14 @@ private fun NodeRow(
                     fontFamily = FontFamily.Monospace,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
             }
             Column(horizontalAlignment = Alignment.End) {
                 if (!unreadable) LatencyIndicator(node.latencyMs)
-                Spacer(Modifier.height(4.dp))
-                Row {
+                // 原来这三个是 11sp 的文字，彼此只隔 10dp，手指偏两毫米就把节点删了。
+                // 换成 IconButton 拿到默认的 48dp 命中区，删除再往溢出菜单里挪一层。
+                Row(verticalAlignment = Alignment.CenterVertically) {
                     if (selected && !unreadable) {
                         Icon(
                             Icons.Default.Check,
@@ -551,28 +622,47 @@ private fun NodeRow(
                             tint = MaterialTheme.colorScheme.primary,
                             modifier = Modifier.size(18.dp),
                         )
-                        Spacer(Modifier.width(8.dp))
+                        Spacer(Modifier.width(4.dp))
                     }
-                    Text(
-                        text = "分享",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.clickable(onClick = onShare),
-                    )
-                    Spacer(Modifier.width(10.dp))
-                    Text(
-                        text = "编辑",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.clickable(onClick = onEdit),
-                    )
-                    Spacer(Modifier.width(10.dp))
-                    Text(
-                        text = "删除",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.error,
-                        modifier = Modifier.clickable(onClick = onDelete),
-                    )
+                    IconButton(onClick = onShare) {
+                        Icon(
+                            Icons.Default.Share,
+                            contentDescription = "分享",
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(18.dp),
+                        )
+                    }
+                    IconButton(onClick = onEdit) {
+                        Icon(
+                            Icons.Default.Edit,
+                            contentDescription = "编辑",
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(18.dp),
+                        )
+                    }
+                    Box {
+                        IconButton(onClick = { menuOpen = true }) {
+                            Icon(
+                                Icons.Default.MoreVert,
+                                contentDescription = "更多操作",
+                                modifier = Modifier.size(18.dp),
+                            )
+                        }
+                        DropdownMenu(
+                            expanded = menuOpen,
+                            onDismissRequest = { menuOpen = false },
+                        ) {
+                            DropdownMenuItem(
+                                text = {
+                                    Text("删除", color = MaterialTheme.colorScheme.error)
+                                },
+                                onClick = {
+                                    menuOpen = false
+                                    onDelete()
+                                },
+                            )
+                        }
+                    }
                 }
             }
         }

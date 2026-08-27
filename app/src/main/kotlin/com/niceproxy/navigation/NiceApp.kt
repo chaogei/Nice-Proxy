@@ -45,6 +45,7 @@ import com.niceproxy.feature.monitor.MonitorScreen
 import com.niceproxy.feature.more.MoreScreen
 import com.niceproxy.feature.nodes.NodeEditScreen
 import com.niceproxy.feature.nodes.NodesScreen
+import com.niceproxy.feature.onboarding.OnboardingScreen
 import com.niceproxy.feature.routing.RoutingScreen
 import com.niceproxy.feature.routing.RuleEditScreen
 import com.niceproxy.feature.scan.ScanScreen
@@ -66,6 +67,7 @@ fun NiceApp(
 
     val configOutdated by viewModel.configOutdated.collectAsStateWithLifecycle()
     val configMessage by viewModel.configMessage.collectAsStateWithLifecycle()
+    val onboardingCompleted by viewModel.onboardingCompleted.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
 
     // 配置改动不立刻重启内核：那会在用户还在连续调整设置时反复断流。
@@ -91,7 +93,8 @@ fun NiceApp(
     GlassScaffold(
         snackbarHostState = snackbarHostState,
         bottomBar = {
-            if (isTopLevel) {
+            // 引导页期间不给底部导航：此时还没有「切到别的 Tab」这回事
+            if (isTopLevel && onboardingCompleted) {
                 GlassBottomBar(
                     current = TopLevelDestination.entries.firstOrNull { dest ->
                         currentRoute?.hierarchy?.any { it.route == dest.route } == true
@@ -101,6 +104,13 @@ fun NiceApp(
             }
         },
     ) { padding ->
+        if (!onboardingCompleted) {
+            // 整个 NavHost 都不组合：首启时不该有任何 ViewModel 在后面预热，
+            // 尤其是首页那条连接监控的 WebSocket
+            OnboardingScreen(onFinish = viewModel::completeOnboarding)
+            return@GlassScaffold
+        }
+
         NavHost(
             navController = navController,
             startDestination = TopLevelDestination.HOME.route,
@@ -111,6 +121,8 @@ fun NiceApp(
                     onEditInbound = { navController.navigate(Routes.inboundEdit(it)) },
                     onAddInbound = { navController.navigate(Routes.inboundEdit(Routes.NEW_ID)) },
                     onOpenNodes = { navController.navigateToTopLevel(TopLevelDestination.NODES) },
+                    onOpenMonitor = { navController.navigate(Routes.MONITOR) },
+                    onOpenSettings = { navController.navigate(Routes.SETTINGS) },
                 )
             }
             composable(TopLevelDestination.NODES.route) { entry ->

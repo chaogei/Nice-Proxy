@@ -116,13 +116,23 @@ class SubscriptionParserTest {
         }
 
         @Test
-        fun `Hysteria2 自动启用 TLS 并识别跳过校验`() {
+        fun `Hysteria2 自动启用 TLS`() {
             val node = SubscriptionParser.parse(yaml).getOrThrow().nodes
                 .single { it.protocol == ProxyProtocol.HYSTERIA2 }
 
             assertThat(node.tls?.enabled).isTrue()
-            assertThat(node.tls?.insecure).isTrue()
             assertThat((node.params as ProtocolParams.Hysteria2).password).isEqualTo("hy-pw")
+        }
+
+        @Test
+        fun `订阅要求的 skip-cert-verify 不予采信，只计数`() {
+            // 订阅正文由机场控制，而 SubscriptionUpdateWorker 会定期拉取并覆盖节点：
+            // 导入时干净的订阅可以在某次自动更新后把所有节点悄悄变成不校验证书
+            val result = SubscriptionParser.parse(yaml).getOrThrow()
+            val node = result.nodes.single { it.protocol == ProxyProtocol.HYSTERIA2 }
+
+            assertThat(node.tls?.insecure).isFalse()
+            assertThat(result.ignoredInsecureCount).isEqualTo(1)
         }
     }
 
@@ -155,6 +165,26 @@ class SubscriptionParserTest {
             val params = node.params as ProtocolParams.Hysteria2
             assertThat(params.obfsType).isEqualTo("salamander")
             assertThat(node.tls?.alpn).containsExactly("h3")
+        }
+
+        @Test
+        fun `tls 段里的 insecure 同样不予采信`() {
+            val content = """
+                {
+                  "outbounds": [
+                    {
+                      "type": "trojan", "tag": "T",
+                      "server": "t.example.com", "server_port": 443,
+                      "password": "pw",
+                      "tls": { "enabled": true, "server_name": "t.example.com", "insecure": true }
+                    }
+                  ]
+                }
+            """.trimIndent()
+            val result = SubscriptionParser.parse(content).getOrThrow()
+
+            assertThat(result.nodes.single().tls?.insecure).isFalse()
+            assertThat(result.ignoredInsecureCount).isEqualTo(1)
         }
     }
 
@@ -462,6 +492,28 @@ class SubscriptionParserTest {
 
             assertThat(result.nodes).hasSize(1)
             assertThat(result.nodes.single().serverPort).isEqualTo(8388)
+        }
+    }
+
+    @Nested
+    @DisplayName("证书校验")
+    inner class CertVerification {
+
+        @Test
+        fun `链接列表订阅的忽略计数会一路带到订阅结果里`() {
+            val content = "trojan://pw@a.com:443?allowInsecure=1#A\ntrojan://pw@b.com:443#B"
+            val result = SubscriptionParser.parse(content).getOrThrow()
+
+            assertThat(result.format).isEqualTo(SubscriptionFormat.PLAIN_LINKS)
+            assertThat(result.nodes.none { it.tls?.insecure == true }).isTrue()
+            // 分享链接那条路径自己已经清洗过一遍，订阅这一层不能再数第二次
+            assertThat(result.ignoredInsecureCount).isEqualTo(1)
+        }
+
+        @Test
+        fun `没有节点要求关闭校验时计数为零`() {
+            val result = SubscriptionParser.parse("trojan://pw@a.com:443#A").getOrThrow()
+            assertThat(result.ignoredInsecureCount).isEqualTo(0)
         }
     }
 }

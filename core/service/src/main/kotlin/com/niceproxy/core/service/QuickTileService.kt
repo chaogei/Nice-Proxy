@@ -3,6 +3,7 @@ package com.niceproxy.core.service
 import android.os.Build
 import android.service.quicksettings.Tile
 import android.service.quicksettings.TileService
+import android.util.Log
 import androidx.annotation.RequiresApi
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.CoroutineScope
@@ -44,7 +45,10 @@ class QuickTileService : TileService() {
 
     override fun onClick() {
         super.onClick()
-        controller.toggle()
+        // 磁贴点击跑在 SystemUI 托管的进程回调里，这里抛出去就是一次崩溃 ——
+        // 而 toggle() 内部会调 startForegroundService，那在后台受限时是真的会抛。
+        runCatching { controller.toggle() }
+            .onFailure { Log.w(TAG, "磁贴切换失败", it) }
     }
 
     private fun render(state: ProxyState) {
@@ -66,5 +70,9 @@ class QuickTileService : TileService() {
             }
         }
         tile.updateTile()
+    }
+
+    private companion object {
+        const val TAG = "QuickTileService"
     }
 }

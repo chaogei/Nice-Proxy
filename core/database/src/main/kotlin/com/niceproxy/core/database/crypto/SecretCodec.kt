@@ -1,5 +1,8 @@
 package com.niceproxy.core.database.crypto
 
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import java.security.GeneralSecurityException
 import javax.crypto.Cipher
 import javax.crypto.SecretKey
@@ -37,6 +40,8 @@ interface SecretKeyProvider {
  */
 class SecretCodec(private val keyProvider: SecretKeyProvider) {
 
+    private val _degraded = MutableStateFlow(false)
+
     /**
      * 是否已退化为明文存储。
      *
@@ -44,10 +49,14 @@ class SecretCodec(private val keyProvider: SecretKeyProvider) {
      * 是刻意的取舍：字段级加密在本项目里是纵深防御，真正兜底的是应用沙箱
      * 与文件级加密（FBE）；为了它让用户完全没法保存节点是本末倒置。
      * 但这个状态必须能被上层查询到并提示用户，不能悄悄发生。
+     *
+     * 做成 [StateFlow] 而不是一个普通字段，是因为它会在任意一次写入时翻转，
+     * 而那一刻用户多半停在别的页面上 —— 只能查询的状态位没人会去查。
+     * 上层通过 `health.CredentialHealth` 订阅它。
      */
-    @Volatile
-    var isDegraded: Boolean = false
-        private set
+    val degraded: StateFlow<Boolean> = _degraded.asStateFlow()
+
+    val isDegraded: Boolean get() = _degraded.value
 
     fun encrypt(plaintext: String): String {
         val key = keyProvider.keyOrNull() ?: return degrade(plaintext)
@@ -85,7 +94,7 @@ class SecretCodec(private val keyProvider: SecretKeyProvider) {
     }
 
     private fun degrade(plaintext: String): String {
-        isDegraded = true
+        _degraded.value = true
         return plaintext
     }
 

@@ -41,6 +41,12 @@ data class SubscriptionResult(
     val format: SubscriptionFormat,
     val nodes: List<ServerProfile>,
     val failedEntries: List<String> = emptyList(),
+    /**
+     * 有多少个节点要求关闭 TLS 证书校验、已被忽略，见 RemoteTlsPolicy。
+     *
+     * 这些节点仍然会被导入，只是证书校验保持开启。
+     */
+    val ignoredInsecureCount: Int = 0,
 )
 
 object SubscriptionParser {
@@ -104,13 +110,36 @@ object SubscriptionParser {
         return runCatching {
             when (detected.format) {
                 SubscriptionFormat.BASE64_LINKS, SubscriptionFormat.PLAIN_LINKS ->
-                    ShareLinkParsers.parseMany(detected.content, groupId)
-                        .let { SubscriptionResult(detected.format, it.nodes, it.failedLines) }
+                    ShareLinkParsers.parseMany(detected.content, groupId).let {
+                        SubscriptionResult(
+                            format = detected.format,
+                            nodes = it.nodes,
+                            failedEntries = it.failedLines,
+                            ignoredInsecureCount = it.ignoredInsecureCount,
+                        )
+                    }
                 SubscriptionFormat.CLASH_YAML -> parseClash(detected.content, groupId)
                 SubscriptionFormat.SING_BOX_JSON -> parseSingBox(detected.content, groupId)
                 SubscriptionFormat.SIP008 -> parseSip008(detected.content, groupId)
             }
+        }.map { it.enforceTlsPolicy() }
+    }
+
+    /**
+     * 所有格式最后统一过这一道，而不是让每个 `parseXxx` 自己记得清洗。
+     *
+     * 订阅格式还会继续加（每家机场都有自己的花样），而漏掉清洗的默认结果是
+     * 「悄悄放行 insecure」。链接列表那条路径已经在 [ShareLinkParsers] 里清洗过，
+     * 计数从它带来的值继续累加，这里不会重复计。
+     */
+    private fun SubscriptionResult.enforceTlsPolicy(): SubscriptionResult {
+        var ignored = ignoredInsecureCount
+        val cleaned = nodes.map { node ->
+            val sanitized = RemoteTlsPolicy.sanitize(node)
+            if (sanitized.insecureIgnored) ignored++
+            sanitized.profile
         }
+        return copy(nodes = cleaned, ignoredInsecureCount = ignored)
     }
 
     /**

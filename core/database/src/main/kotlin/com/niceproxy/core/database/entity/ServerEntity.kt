@@ -18,6 +18,7 @@ import com.niceproxy.core.model.ServerProfile
 import com.niceproxy.core.model.SubscriptionTraffic
 import com.niceproxy.core.model.TlsConfig
 import com.niceproxy.core.model.TransportConfig
+import kotlinx.serialization.DeserializationStrategy
 import kotlinx.serialization.json.Json
 
 /**
@@ -30,6 +31,20 @@ internal val entityJson = Json {
     ignoreUnknownKeys = true
     encodeDefaults = true
 }
+
+/**
+ * 反序列化失败一律退化成 null，不让异常冒到调用方。
+ *
+ * `ServerRepository.servers` 是 `list.map { it.toDomain() }`，一条记录抛异常
+ * 会让整条 Flow 失败、整个节点页变空白，`ConfigRepository` 也会跟着抛，
+ * 代理直接起不来。单条记录的 JSON 读不懂不该有这么大的爆炸半径。
+ *
+ * 注意 `ignoreUnknownKeys` 顶不住这些情况：它只忽略未知的**键**，
+ * 对未知的**类型判别符**无效 —— 删掉一个 `RuleAction` 分支之后，
+ * 旧数据依然会抛 `SerializationException`。
+ */
+internal fun <T> decodeOrNull(deserializer: DeserializationStrategy<T>, json: String): T? =
+    runCatching { entityJson.decodeFromString(deserializer, json) }.getOrNull()
 
 @Entity(
     tableName = "servers",
@@ -75,6 +90,20 @@ data class ServerEntity(
      */
     val hasUnreadableCredentials: Boolean
         get() = paramsJson is SecretText.Unreadable
+
+    /**
+     * 这一行能不能被**无损**地还原成领域对象。
+     *
+     * 和 [hasUnreadableCredentials] 问的不是一件事：那个问「密文解不解得开」，
+     * 这个问「解开之后的 JSON 还认不认得」。后者的成因通常是代码改动
+     * ——给某个配置类加了没有默认值的字段、改了字段名、删了一个密封类分支——
+     * 数据本身是好的。
+     *
+     * 备份导出靠它过滤：降级后的领域对象里塞的是占位值，照原样写进备份等于
+     * 把一次序列化失误固化成永久的数据损坏，而用户要等到换机恢复才发现。
+     */
+    val isFullyDecodable: Boolean
+        get() = !decode().degraded
 }
 
 /**
@@ -90,20 +119,73 @@ data class ServerEntity(
  */
 private val UNREADABLE_PARAMS = ProtocolParams.Trojan(password = "")
 
+/**
+ * TLS 配置读不出来时顶替上去的值。
+ *
+ * 关键在于**不能退化成 null**。`tls_json` 非空就说明这个节点当初是配了 TLS 的，
+ * 而 VMess / VLESS / Trojan 在 `tls` 缺席时照样能生成一个语法合法的出站 ——
+ * 连接直接变成明文，界面上没有任何区别，用户不会察觉。相比之下，顶一个
+ * 最保守的「TLS 开着、其余走默认」上去，最坏结果是握手失败连不上：
+ * 那是看得见的失败，远好过看不见的裸奔。
+ */
+private val UNREADABLE_TLS = TlsConfig(enabled = true)
+
+/**
+ * 一行 [ServerEntity] 的四个 JSON 列的解码结果。
+ *
+ * 单独抽出来是因为 `toDomain()` 和 [ServerEntity.isFullyDecodable] 要问的是
+ * 同一件事的两面，共用一份解码逻辑才不会有一天走偏。
+ */
+private class DecodedServer(
+    val params: ProtocolParams?,
+    val transport: TransportConfig?,
+    val tls: TlsConfig?,
+    val multiplex: MultiplexConfig?,
+    /** 四列里只要有一列「本来有值、却读不出来」就为 true。 */
+    val degraded: Boolean,
+)
+
+private fun ServerEntity.decode(): DecodedServer {
+    val params = paramsJson.readableOrNull?.let { decodeOrNull(ProtocolParams.serializer(), it) }
+    val transport = transportJson?.let { decodeOrNull(TransportConfig.serializer(), it) }
+    val tls = tlsJson?.let { decodeOrNull(TlsConfig.serializer(), it) }
+    val multiplex = multiplexJson?.let { decodeOrNull(MultiplexConfig.serializer(), it) }
+    return DecodedServer(
+        params = params,
+        transport = transport,
+        tls = tls,
+        multiplex = multiplex,
+        degraded = params == null ||
+            (transportJson != null && transport == null) ||
+            (tlsJson != null && tls == null) ||
+            (multiplexJson != null && multiplex == null),
+    )
+}
+
+/**
+ * 注意这个映射是**有损**的：降级过的节点再 `toEntity()` 写回去，占位值就会
+ * 覆盖掉原本还完好的 JSON。目前只有用户手动编辑并保存节点会走到那条路
+ * （测速回写、启停都是直接打 SQL，碰不到这几列），而那时用户本来就是在
+ * 重填这个节点。加新的写入路径时要留意这一点。
+ */
 fun ServerEntity.toDomain(): ServerProfile {
-    val params = paramsJson.readableOrNull?.let(::decodeParamsOrNull)
+    val decoded = decode()
     return ServerProfile(
         id = id,
         groupId = groupId,
         name = name,
-        credentialState = if (params == null) CredentialState.UNREADABLE else CredentialState.OK,
+        // 复用 UNREADABLE 这一个状态位是因为 core:model 里只有它，而对用户来说
+        // 两种情况的处置方式完全一样：这个节点用不了了，重新导入一次。
+        credentialState = if (decoded.degraded) CredentialState.UNREADABLE else CredentialState.OK,
         protocol = protocol,
         server = server,
         serverPort = serverPort,
-        params = params ?: UNREADABLE_PARAMS,
-        transport = transportJson?.let { entityJson.decodeFromString(TransportConfig.serializer(), it) },
-        tls = tlsJson?.let { entityJson.decodeFromString(TlsConfig.serializer(), it) },
-        multiplex = multiplexJson?.let { entityJson.decodeFromString(MultiplexConfig.serializer(), it) },
+        params = decoded.params ?: UNREADABLE_PARAMS,
+        // transport / multiplex 退化成 null 是安全的：前者会让连接握不上手，
+        // 后者只是不复用连接，两者都不会把加密悄悄关掉。tls 不行，见 UNREADABLE_TLS。
+        transport = decoded.transport,
+        tls = if (tlsJson != null && decoded.tls == null) UNREADABLE_TLS else decoded.tls,
+        multiplex = decoded.multiplex,
         sortOrder = sortOrder,
         latencyMs = latencyMs,
         lastTestedAt = lastTestedAt,
@@ -111,15 +193,6 @@ fun ServerEntity.toDomain(): ServerProfile {
         updatedAt = updatedAt,
     )
 }
-
-/**
- * 反序列化失败也按「读不出来」处理，而不是让异常冒到调用方。
- *
- * `ServerRepository.servers` 是 `list.map { it.toDomain() }`，一条记录抛异常
- * 会让整条 Flow 失败、整个节点页变空白。单个节点的 JSON 损坏不该有这么大的爆炸半径。
- */
-private fun decodeParamsOrNull(json: String): ProtocolParams? =
-    runCatching { entityJson.decodeFromString(ProtocolParams.serializer(), json) }.getOrNull()
 
 fun ServerProfile.toEntity(): ServerEntity = ServerEntity(
     id = id,
@@ -161,7 +234,18 @@ data class ServerGroupEntity(
     @ColumnInfo(name = "filter_exclude", defaultValue = "1") val filterExclude: Boolean = true,
     /** 部分机场用自定义头做鉴权，这里可能直接躺着一个 `Authorization`。 */
     @ColumnInfo(name = "extra_headers") val extraHeaders: SecretText? = null,
-)
+) {
+    /**
+     * 分组里有解不开的密文。
+     *
+     * 两个字段都算：订阅 URL 里的 token 和 `extra_headers` 里可能存在的
+     * `Authorization`，缺任何一个这个订阅都刷新不了，而它们恰恰是用户最
+     * 不可能靠记忆重建的东西。备份导出要据此把这个分组整个排除掉 ——
+     * 见 `BackupRepository`。
+     */
+    val hasUnreadableSecrets: Boolean
+        get() = url is SecretText.Unreadable || extraHeaders is SecretText.Unreadable
+}
 
 /**
  * 订阅地址解不开时退化为 null。
@@ -180,7 +264,9 @@ fun ServerGroupEntity.toDomain(): ServerGroup = ServerGroup(
     updateIntervalMinutes = updateIntervalMinutes,
     lastUpdateAt = lastUpdateAt,
     lastError = lastError,
-    traffic = trafficJson?.let { entityJson.decodeFromString(SubscriptionTraffic.serializer(), it) },
+    // 流量统计读不懂就丢掉，不影响这个分组是否可导出：它是纯展示数据，
+    // 下一次刷新订阅时会从响应头里重新拿到，不存在「丢了就没了」的问题。
+    traffic = trafficJson?.let { decodeOrNull(SubscriptionTraffic.serializer(), it) },
     sortOrder = sortOrder,
     remarksFilter = remarksFilter,
     filterExclude = filterExclude,

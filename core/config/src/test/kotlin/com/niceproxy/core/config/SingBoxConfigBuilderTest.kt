@@ -37,6 +37,13 @@ class SingBoxConfigBuilderTest {
         return Json.parseToJsonElement((result as ConfigResult.Success).json).jsonObject
     }
 
+    /**
+     * 只想验证「坏节点被跳过」的用例，都得给它配一个好节点。
+     * 全部节点都不可用现在是 [ConfigError.NoUsableNode] 失败，见 [NoUsableNodes]。
+     */
+    private fun withHealthyPeer(bad: ServerProfile): ConfigInput =
+        Fixtures.input(nodes = listOf(bad, Fixtures.vmessWs()))
+
     @Nested
     @DisplayName("生成器硬性约束")
     inner class Constraints {
@@ -270,7 +277,7 @@ class SingBoxConfigBuilderTest {
         @Test
         fun `Hysteria2 缺少混淆密码时降级为警告而非失败`() {
             val bad = Fixtures.hysteria2(obfsType = "salamander", obfsPassword = null)
-            val result = builder.build(Fixtures.input(nodes = listOf(bad, Fixtures.vmessWs())))
+            val result = builder.build(withHealthyPeer(bad))
             assertThat(result).isInstanceOf(ConfigResult.Success::class.java)
             val warnings = (result as ConfigResult.Success).warnings
             assertThat(warnings).hasSize(1)
@@ -280,7 +287,7 @@ class SingBoxConfigBuilderTest {
         @Test
         fun `端口跳跃格式非法时该节点被跳过`() {
             val bad = Fixtures.hysteria2(serverPorts = listOf("not-a-range"))
-            val result = builder.build(Fixtures.input(nodes = listOf(bad)))
+            val result = builder.build(withHealthyPeer(bad))
             assertThat((result as ConfigResult.Success).warnings).hasSize(1)
         }
 
@@ -311,15 +318,27 @@ class SingBoxConfigBuilderTest {
             val node = Fixtures.shadowsocks().copy(
                 transport = com.niceproxy.core.model.TransportConfig.WebSocket(),
             )
-            val result = builder.build(Fixtures.input(nodes = listOf(node)))
+            val result = builder.build(withHealthyPeer(node))
             assertThat((result as ConfigResult.Success).warnings).hasSize(1)
         }
 
         @Test
         fun `要求 TLS 的协议未启用 TLS 时被跳过`() {
             val node = Fixtures.hysteria2().copy(tls = null)
-            val result = builder.build(Fixtures.input(nodes = listOf(node)))
+            val result = builder.build(withHealthyPeer(node))
             assertThat((result as ConfigResult.Success).warnings).hasSize(1)
+        }
+
+        @Test
+        fun `关闭证书校验的节点照常生成，但带一条警告`() {
+            val node = Fixtures.hysteria2().let { it.copy(tls = it.tls!!.copy(insecure = true)) }
+            val input = Fixtures.input(nodes = listOf(node))
+            val result = builder.build(input)
+            val tls = buildOk(input).outbound(node.outboundTag)["tls"]!!.jsonObject
+
+            assertThat(tls["insecure"]!!.jsonPrimitive.content).isEqualTo("true")
+            assertThat((result as ConfigResult.Success).warnings)
+                .contains(ConfigError.InsecureTls(node.id, node.name))
         }
 
         @Test
@@ -412,6 +431,128 @@ class SingBoxConfigBuilderTest {
             val root = buildOk(Fixtures.input(nodes = listOf(Fixtures.hysteria2())))
             val privateRule = root.routeRules().single { it.containsKey("ip_is_private") }
             assertThat(privateRule["outbound"]!!.jsonPrimitive.content).isEqualTo(WellKnownTag.DIRECT)
+        }
+    }
+
+    /**
+     * 「配了节点但一个都用不了」与「一个节点都没配」生成出来的配置几乎一模一样：
+     * 都完全合法、内核照常加载、客户端照常上网。区别只在于前者的用户以为自己
+     * 在走代理，实际上 100% 流量在裸奔，而且没有任何异常表现能让他察觉。
+     */
+    @Nested
+    @DisplayName("协议与参数不匹配")
+    inner class MismatchedParams {
+
+        /**
+         * 这个形状来自数据库降级：`protocol` 列读不出来时会兜底成 TROJAN
+         * （绝不能兜底成 DIRECT，那会生成一个可用的直连出站让流量裸奔），
+         * 而 `params_json` 若恰好完好，两者就对不上了。
+         */
+        private fun corrupted(id: String) = Fixtures.shadowsocks(id)
+            .copy(protocol = ProxyProtocol.TROJAN)
+
+        @Test
+        fun `坏节点被单独挡下，不连累其余节点`() {
+            // 不挡的话会写出 type=trojan 配着 shadowsocks 字段的 outbound，
+            // sing-box 拒绝的是整份配置——一条坏记录让所有节点一起失效
+            val config = buildOk(
+                Fixtures.input(nodes = listOf(corrupted("bad"), Fixtures.vmessWs("good"))),
+            )
+
+            val tags = config["outbounds"]!!.jsonArray
+                .mapNotNull { it.jsonObject["tag"]?.jsonPrimitive?.contentOrNull }
+            assertThat(tags.any { it.contains("good") }).isTrue()
+            assertThat(tags.any { it.contains("bad") }).isFalse()
+        }
+
+        @Test
+        fun `全部损坏时走无可用节点的硬失败，而不是生成半份配置`() {
+            val result = builder.build(Fixtures.input(nodes = listOf(corrupted("a"))))
+
+            assertThat(result).isInstanceOf(ConfigResult.Failure::class.java)
+            assertThat((result as ConfigResult.Failure).errors.map { it::class })
+                .contains(ConfigError.NoUsableNode::class)
+        }
+
+        @Test
+        fun `匹配的节点不受影响`() {
+            val result = builder.build(Fixtures.input(nodes = listOf(Fixtures.shadowsocks())))
+
+            assertThat(result).isInstanceOf(ConfigResult.Success::class.java)
+        }
+    }
+
+    @Nested
+    @DisplayName("节点全部不可用")
+    inner class NoUsableNodes {
+
+        @Test
+        fun `凭据全部解不开时构建失败，而不是静默生成一份全直连配置`() {
+            // Keystore 密钥失效（恢复出厂 / 换机还原 / 改锁屏）就是这个形状：
+            // 密钥是全局的，整张表的节点会同时解不开
+            val nodes = listOf(Fixtures.unreadableCredentials("a"), Fixtures.unreadableCredentials("b"))
+            val result = builder.build(Fixtures.input(nodes = nodes))
+
+            assertThat(result).isInstanceOf(ConfigResult.Failure::class.java)
+            val summary = (result as ConfigResult.Failure).errors
+                .filterIsInstance<ConfigError.NoUsableNode>()
+                .single()
+            assertThat(summary.configuredCount).isEqualTo(2)
+            assertThat(summary.unreadableCount).isEqualTo(2)
+        }
+
+        @Test
+        fun `凭据以外的原因导致全不可用时同样失败`() {
+            // 不依赖 credentialState：只要「配了 N 个、可用 0 个」就该拦下来
+            val nodes = listOf(Fixtures.hysteria2(serverPorts = listOf("not-a-range")))
+            val result = builder.build(Fixtures.input(nodes = nodes))
+
+            assertThat(result).isInstanceOf(ConfigResult.Failure::class.java)
+            assertThat((result as ConfigResult.Failure).errors.map { it::class })
+                .contains(ConfigError.NoUsableNode::class)
+        }
+
+        @Test
+        fun `错误文案指向重新导入，而不是只说一句配置生成失败`() {
+            val result = builder.build(Fixtures.input(nodes = listOf(Fixtures.unreadableCredentials())))
+            val message = (result as ConfigResult.Failure).errors.first().message
+
+            assertThat(message).contains("凭据")
+            assertThat(message).contains("重新导入")
+        }
+
+        @Test
+        fun `一个节点都没配时仍然成功，退化为纯中继`() {
+            // 全新安装就是这个状态。此时只转发不代理是预期行为，不能拦。
+            val result = builder.build(Fixtures.input(nodes = emptyList()))
+            assertThat(result).isInstanceOf(ConfigResult.Success::class.java)
+
+            val root = Json.parseToJsonElement((result as ConfigResult.Success).json).jsonObject
+            assertThat(root["outbounds"]!!.jsonArray.map { it.jsonObject["type"]!!.jsonPrimitive.content })
+                .containsExactly("direct")
+            assertThat(root["route"]!!.jsonObject["final"]!!.jsonPrimitive.content)
+                .isEqualTo(WellKnownTag.DIRECT)
+        }
+
+        @Test
+        fun `只要还剩一个可用节点就照常构建`() {
+            val nodes = listOf(Fixtures.unreadableCredentials("bad"), Fixtures.hysteria2("ok"))
+            val result = builder.build(Fixtures.input(nodes = nodes))
+
+            assertThat(result).isInstanceOf(ConfigResult.Success::class.java)
+            assertThat((result as ConfigResult.Success).warnings.map { it::class })
+                .contains(ConfigError.InvalidNode::class)
+        }
+
+        @Test
+        fun `失败明细不随节点数量线性膨胀`() {
+            // ProxyService 把 errors 的 message 直接 join 进通知文案。
+            // 密钥失效时几千个节点会给出几千条同因的 InvalidNode，拼起来能把通知撑爆。
+            val nodes = (0 until 500).map { Fixtures.unreadableCredentials("n$it") }
+            val result = builder.build(Fixtures.input(nodes = nodes))
+
+            assertThat((result as ConfigResult.Failure).errors.size).isLessThan(10)
+            assertThat(result.errors.first()).isInstanceOf(ConfigError.NoUsableNode::class.java)
         }
     }
 

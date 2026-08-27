@@ -20,8 +20,38 @@ internal class InboundRepositoryTest {
         assertThat(created.type).isEqualTo(InboundType.MIXED)
         assertThat(created.listen).isEqualTo(InboundService.LISTEN_ALL)
         assertThat(created.listenPort).isEqualTo(InboundService.DEFAULT_MIXED_PORT)
-        // 默认监听 0.0.0.0 且免认证，UI 必须为此显示警告徽章
-        assertThat(created.isExposedWithoutAuth).isTrue()
+    }
+
+    @Test
+    fun `默认入站带随机凭据，绝不免认证`() = runTest {
+        // 监听 0.0.0.0 是这个产品存在的意义，但免认证的话，同网段任何人
+        // 不只能白嫖用户付费的机场流量，还能靠「私有 IP 走直连」这条内置规则
+        // 拿这台手机当跳板打进整个局域网乃至手机自己的回环地址
+        repository.ensureDefaults()
+        val created = repository.getAll().single()
+
+        assertThat(created.isExposedWithoutAuth).isFalse()
+        val auth = requireNotNull(created.auth)
+        assertThat(auth.username).isNotEmpty()
+        assertThat(auth.password.length).isAtLeast(12)
+    }
+
+    @Test
+    fun `凭据每次生成都不同，且不含易混字符`() = runTest {
+        // 固定口令等于没有口令。而 0O1lI 要靠用户在游戏机软键盘上手抄，
+        // 认错一个字符的排查成本远高于多两位熵
+        repository.ensureDefaults()
+        val first = requireNotNull(repository.getAll().single().auth)
+
+        val second = requireNotNull(
+            InboundRepository(FakeInboundDao(), Dispatchers.Unconfined)
+                .also { it.ensureDefaults() }
+                .getAll().single().auth,
+        )
+
+        assertThat(first.password).isNotEqualTo(second.password)
+        assertThat(first.username).isNotEqualTo(second.username)
+        assertThat(first.password.any { it in "0O1lI" }).isFalse()
     }
 
     @Test
