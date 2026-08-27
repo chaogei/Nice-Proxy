@@ -1,0 +1,27 @@
+# 本仓库在 Windows 上开发、在 Linux runner 上构建，两边对换行符和文件权限的处理
+# 完全不同。不显式声明的话，会出现只在 CI 上复现、本地怎么都试不出来的故障。
+
+# 默认按平台自动转换
+* text=auto
+
+# 在 Linux 上执行的脚本必须是 LF。带 CRLF 的话 shell 会把行尾的 \r 也当成
+# shebang 的一部分，报 "bad interpreter: /bin/sh^M" —— 这个错误信息里的 ^M
+# 在多数终端上不显示，看起来就像解释器路径明明对却找不到。
+gradlew         text eol=lf
+*.sh            text eol=lf
+
+# PowerShell 脚本同理：CI 用 ubuntu runner 上的 pwsh 跑 native/libnice/build.ps1
+*.ps1           text eol=lf
+
+# 只在 Windows 上跑的，保持 CRLF
+gradlew.bat     text eol=crlf
+*.cmd           text eol=crlf
+
+# 二进制文件，绝不做换行符转换（转了就是直接损坏）
+*.jar           binary
+*.aar           binary
+*.so            binary
+*.keystore      binary
+*.jks           binary
+*.png           binary
+*.webp          binary

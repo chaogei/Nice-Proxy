@@ -72,12 +72,18 @@ jobs:
       # 缓存键只取 Go 侧的源码与依赖：绝大多数提交只动 Kotlin，命中缓存后这一整段
       # 都会跳过。键里带上 NDK 与 Go 版本，因为换工具链必须重编。
 
-      - name: 缓存 libnice.aar
+      - name: 计算缓存键
+        id: cachekey
+        # 算一次给 restore 和 save 共用。两处各写一遍长表达式的话，
+        # 改了一处忘了另一处就会变成「永远存不进、每次都重编」的静默退化。
+        run: echo "key=libnice-${{ runner.os }}-go${{ env.GO_VERSION }}-ndk${{ env.NDK_VERSION }}-${{ hashFiles('native/libnice/**') }}" >> "$GITHUB_OUTPUT"
+
+      - name: 恢复 libnice.aar 缓存
         id: aar-cache
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: libs/libnice.aar
-          key: libnice-${{ runner.os }}-go${{ env.GO_VERSION }}-ndk${{ env.NDK_VERSION }}-${{ hashFiles('native/libnice/**') }}
+          key: ${{ steps.cachekey.outputs.key }}
 
       - uses: actions/setup-go@v5
         if: steps.aar-cache.outputs.cache-hit != 'true'
@@ -93,10 +99,26 @@ jobs:
         shell: pwsh
         run: ./native/libnice/build.ps1
 
+      - name: 保存 libnice.aar 缓存
+        # 拆成独立的 save 而不是用 actions/cache 的自动保存：后者挂在 post 阶段，
+        # 只有整个 job 成功才执行。一次单元测试失败就会把刚编好的内核连同
+        # 几分钟的编译时间一起扔掉，下一次从头再来。
+        if: always() && steps.aar-cache.outputs.cache-hit != 'true' && hashFiles('libs/libnice.aar') != ''
+        uses: actions/cache/save@v4
+        with:
+          path: libs/libnice.aar
+          key: ${{ steps.cachekey.outputs.key }}
+
       # ------------------------------------------------------------------ 校验
 
       - name: 单元测试
-        run: ./gradlew test --no-daemon --stacktrace
+        # chmod 是兜底：仓库在 Windows 上开发，那里 core.filemode 默认为 false，
+        # git 不跟踪执行位。虽然索引里已经把 gradlew 标成 100755，
+        # 但只要有人在 Windows 上重新添加过这个文件就会丢掉，
+        # 而症状是这一步 0 秒失败、日志里只有一句 Permission denied。
+        run: |
+          chmod +x gradlew
+          ./gradlew test --no-daemon --stacktrace
 
       # -------------------------------------------------------------- 构建与签名
 
