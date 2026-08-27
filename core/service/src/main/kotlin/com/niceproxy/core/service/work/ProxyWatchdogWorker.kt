@@ -9,6 +9,7 @@ import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import com.niceproxy.core.datastore.SettingsDataStore
+import com.niceproxy.core.service.ProxyNotifications
 import com.niceproxy.core.service.ProxyServiceController
 import dagger.assisted.Assisted
 import dagger.assisted.AssistedInject
@@ -42,6 +43,7 @@ class ProxyWatchdogWorker @AssistedInject constructor(
     @Assisted params: WorkerParameters,
     private val settings: SettingsDataStore,
     private val controller: ProxyServiceController,
+    private val notifications: ProxyNotifications,
 ) : CoroutineWorker(context, params) {
 
     override suspend fun doWork(): Result {
@@ -56,8 +58,14 @@ class ProxyWatchdogWorker @AssistedInject constructor(
         } catch (t: Throwable) {
             // Android 12+ 后台启动前台服务会抛 ForegroundServiceStartNotAllowedException，
             // 除非用户关掉了本应用的电池优化（这正是设置页里要引导的那一项）。
+            //
+            // 走到这里就是保活链条上最坏的一格：代理停了，自动恢复也被挡住了。
+            // 只记一条 logcat 的话，用户看到的是「所有设备莫名断网且再也不会好」，
+            // 而且完全无从判断原因，所以必须让他知道。
+            Log.w(TAG, "拉起失败，提醒用户", t)
+            notifications.ensureChannel()
+            notifications.notifyRecoveryBlocked()
             // 不返回 retry：周期任务下一轮还会来，而 retry 的退避会打乱固定节奏。
-            Log.w(TAG, "拉起失败，等待下一轮", t)
             Result.success()
         }
     }

@@ -34,7 +34,53 @@ class ProxyNotifications @Inject constructor(
             setSound(null, null)
         }
         manager?.createNotificationChannel(channel)
+
+        // 单独一个渠道：这类提醒需要用户真的看见并去操作，
+        // 混进上面那条静音的常驻通知里等于不存在。用户也应当能单独关掉它。
+        val alertChannel = NotificationChannel(
+            ALERT_CHANNEL_ID,
+            context.getString(R.string.keepalive_channel_name),
+            NotificationManager.IMPORTANCE_DEFAULT,
+        ).apply {
+            description = context.getString(R.string.keepalive_channel_description)
+        }
+        manager?.createNotificationChannel(alertChannel)
     }
+
+    /**
+     * 代理掉了、而自动恢复也被系统挡住了。
+     *
+     * 这是保活链条上最坏的一格：看门狗醒来发现该跑却没在跑，却因为 Android 12+ 的
+     * 后台启动限制拉不起前台服务。不出这条通知的话，用户那边的表现是「所有设备
+     * 莫名其妙断网，而且再也不会自己好」，且没有任何线索指向原因。
+     */
+    fun notifyRecoveryBlocked() {
+        val notification = NotificationCompat.Builder(context, ALERT_CHANNEL_ID)
+            .setSmallIcon(android.R.drawable.stat_notify_error)
+            .setContentTitle(context.getString(R.string.keepalive_blocked_title))
+            .setContentText(context.getString(R.string.keepalive_blocked_text))
+            .setStyle(
+                NotificationCompat.BigTextStyle()
+                    .bigText(context.getString(R.string.keepalive_blocked_text)),
+            )
+            .setAutoCancel(true)
+            // 同 ID 会替换而不是叠加，配合 OnlyAlertOnce，
+            // 看门狗每 15 分钟失败一次也不会反复响
+            .setOnlyAlertOnce(true)
+            .setCategory(NotificationCompat.CATEGORY_ERROR)
+            .apply { launchIntent()?.let(::setContentIntent) }
+            .build()
+        runCatching { manager?.notify(ALERT_NOTIFICATION_ID, notification) }
+    }
+
+    fun cancelRecoveryBlocked() {
+        runCatching { manager?.cancel(ALERT_NOTIFICATION_ID) }
+    }
+
+    private fun launchIntent(): PendingIntent? =
+        context.packageManager.getLaunchIntentForPackage(context.packageName)?.let {
+            PendingIntent.getActivity(context, 0, it, PendingIntent.FLAG_IMMUTABLE)
+        }
 
     /**
      * @param statusText 覆盖正文。用于展示 [ProxyState] 表达不了的过渡信息 ——
@@ -108,6 +154,9 @@ class ProxyNotifications @Inject constructor(
     companion object {
         const val CHANNEL_ID = "proxy_service"
         const val NOTIFICATION_ID = 1001
+
+        private const val ALERT_CHANNEL_ID = "keepalive_alert"
+        private const val ALERT_NOTIFICATION_ID = 1002
 
         fun formatSpeed(bytesPerSecond: Long): String {
             val value = abs(bytesPerSecond)

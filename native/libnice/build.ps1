@@ -42,6 +42,21 @@ $ErrorActionPreference = 'Stop'
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 Push-Location $scriptDir
 
+# 这个脚本同时跑在开发机（Windows PowerShell 5.1 / PowerShell 7）和 CI
+# （ubuntu-latest 上的 pwsh）。不写两份是因为构建标签、ldflags、对齐校验这些
+# 都是易错且必须保持一致的东西，分成两个文件迟早会漂移出「本地能过 CI 挂」的问题。
+#
+# 用 $env:OS 而不是 $IsWindows：后者在 Windows PowerShell 5.1 里不存在。
+$isWindowsHost = $env:OS -eq 'Windows_NT'
+$exeSuffix = if ($isWindowsHost) { '.exe' } else { '' }
+$ndkHostTag = if ($isWindowsHost) {
+    'windows-x86_64'
+} elseif ($IsMacOS) {
+    'darwin-x86_64'
+} else {
+    'linux-x86_64'
+}
+
 # gomobile 会把 Go 的文档注释原样搬进生成的 Java 文件，再用 javac 编译。
 # javac 的默认源码编码取自 file.encoding，在中文 Windows 上是 GBK，
 # 遇到注释里的中文会报「编码 GBK 的不可映射字符」。
@@ -68,7 +83,8 @@ try {
     }
 
     $goBin = if ($env:GOBIN) { $env:GOBIN } else { Join-Path (go env GOPATH) 'bin' }
-    $env:PATH = "$goBin;$env:PATH"
+    # 分隔符在 Windows 是 ';'、类 Unix 是 ':'，写死任何一个都会让另一边找不到 gomobile
+    $env:PATH = $goBin + [IO.Path]::PathSeparator + $env:PATH
 
     Write-Host '==> 同步依赖' -ForegroundColor Cyan
     go mod tidy
@@ -84,7 +100,9 @@ try {
         '-checklinkname=0'
     ) -join ' '
 
-    $outDir = Join-Path $scriptDir '..\..\libs'
+    # 用 IO.Path::Combine 而不是带反斜杠的字面量：Windows PowerShell 5.1 的
+    # Join-Path 只接受两个参数，而反斜杠在 Linux 上不是路径分隔符
+    $outDir = [IO.Path]::Combine($scriptDir, '..', '..', 'libs')
     New-Item -ItemType Directory -Force -Path $outDir | Out-Null
     $out = Join-Path (Resolve-Path $outDir) 'libnice.aar'
 
@@ -102,7 +120,7 @@ try {
         '-o', $out
         '.'
     )
-    & "$goBin\gomobile.exe" @gomobileArgs
+    & (Join-Path $goBin "gomobile$exeSuffix") @gomobileArgs
     if ($LASTEXITCODE -ne 0) { throw "gomobile bind 失败，退出码 $LASTEXITCODE" }
 
     $size = [math]::Round((Get-Item $out).Length / 1MB, 1)
@@ -110,8 +128,11 @@ try {
 
     # 16 KB 内存页只存在于 64 位设备，armeabi-v7a 保持 4 KB 对齐是正确的
     Write-Host '==> 校验 64 位原生库的 16 KB 页对齐' -ForegroundColor Cyan
-    $readelf = Join-Path $env:ANDROID_NDK_HOME 'toolchains\llvm\prebuilt\windows-x86_64\bin\llvm-readelf.exe'
-    $inspect = Join-Path $env:TEMP 'libnice-align-check'
+    $readelf = [IO.Path]::Combine(
+        $env:ANDROID_NDK_HOME, 'toolchains', 'llvm', 'prebuilt',
+        $ndkHostTag, 'bin', "llvm-readelf$exeSuffix"
+    )
+    $inspect = Join-Path ([IO.Path]::GetTempPath()) 'libnice-align-check'
     Remove-Item $inspect -Recurse -Force -ErrorAction SilentlyContinue
     Copy-Item $out "$inspect.zip" -Force
     Expand-Archive "$inspect.zip" -DestinationPath $inspect -Force

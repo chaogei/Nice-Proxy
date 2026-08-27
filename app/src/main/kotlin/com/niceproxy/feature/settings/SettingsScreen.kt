@@ -293,7 +293,10 @@ fun SettingsScreen(
             )
             SwitchRow(
                 "保持 Wi-Fi 唤醒",
-                "防止息屏后 Wi-Fi 进入省电模式导致断流",
+                // 不能承诺「息屏也保持」：API 34 起系统把 HIGH_PERF 换成了
+                // 只在亮屏时生效的 LOW_LATENCY，Android 14+ 上这个开关息屏即失效
+                "防止 Wi-Fi 进入省电模式导致断流。Android 14 及以上仅在亮屏时有效，" +
+                    "息屏保活请依靠下方的电池优化设置",
                 state.service.keepWifiAwake,
                 viewModel::setKeepWifiAwake,
             )
@@ -323,9 +326,12 @@ fun SettingsScreen(
                 onClick = { KeepAlive.requestIgnoreBatteryOptimizations(context) },
             )
             if (hasVendorAutoStart) {
+                // 标题刻意不写死「自启动」：国产 ROM 上确实是自启动白名单，
+                // 而三星跳过去的是「深度睡眠应用」，叫自启动会和用户看到的页面对不上
                 ClickableRow(
-                    title = "厂商自启动管理",
-                    subtitle = "国产 ROM 另有一套自启动白名单，不加进去前台服务照样会被管家清掉",
+                    title = "厂商后台限制",
+                    subtitle = "厂商在系统电池优化之外另有一套管控，" +
+                        "不把本应用加进白名单，前台服务照样会被手机管家清掉",
                     onClick = { KeepAlive.openAutoStartSettings(context) },
                 )
             }

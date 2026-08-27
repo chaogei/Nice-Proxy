@@ -11,6 +11,7 @@ captures/
 *.apk
 *.aab
 *.keystore
+*.jks
 !debug.keystore
 keystore.properties
 

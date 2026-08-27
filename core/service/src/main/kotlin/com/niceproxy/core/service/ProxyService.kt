@@ -250,6 +250,8 @@ class ProxyService : LifecycleService() {
         // 届时内存里的一切都没了，只有这一位能告诉看门狗「它本来开着」。
         settings.setShouldBeRunning(true)
         watchdog.ensureScheduled()
+        // 起来了，之前那条「无法自动恢复」的提醒就不该再挂着
+        notifications.cancelRecoveryBlocked()
     }
 
     /**

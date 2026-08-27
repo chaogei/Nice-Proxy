@@ -1,0 +1,228 @@
+name: Build & Release
+
+# 每次推 main 都出一个预发布；打 v* 标签才是正式发布。
+#
+# 为什么区分：GitHub 的「Latest release」徽章只认正式发布，如果每次推送都是正式版，
+# 那个徽章会永远指向最近一次随手改的提交。想跳过某次构建，在提交信息里写 [skip ci]。
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  # 连着推几个提交时，只让最后一个跑完。前面那些的产物没人要，
+  # 但**不取消已在进行的**：gomobile 那一步很贵，中途掐掉等于白烧几十分钟。
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  # NDK r28 起才支持 Android 15 要求的 16 KB 内存页对齐，低于它构建脚本会自检失败
+  NDK_VERSION: '28.2.13676358'
+  GO_VERSION: '1.24.7'
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # 默认只取当前提交，发布说明里的 git log / git tag 会拿不到历史
+          fetch-depth: 0
+
+      - name: 计算版本号
+        id: version
+        run: |
+          BASE=$(grep '^niceproxy.versionName=' gradle.properties | cut -d= -f2 | tr -d '[:space:]')
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            # 标签就是版本号本身，去掉前缀 v
+            NAME="${GITHUB_REF#refs/tags/v}"
+            PRERELEASE=false
+          else
+            NAME="${BASE}.${GITHUB_RUN_NUMBER}"
+            PRERELEASE=true
+          fi
+          {
+            echo "name=${NAME}"
+            echo "code=${GITHUB_RUN_NUMBER}"
+            echo "prerelease=${PRERELEASE}"
+          } >> "$GITHUB_OUTPUT"
+          echo "版本 ${NAME}（versionCode ${GITHUB_RUN_NUMBER}，预发布=${PRERELEASE}）"
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: 安装 NDK
+        run: |
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "ndk;${NDK_VERSION}"
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/${NDK_VERSION}" >> "$GITHUB_ENV"
+
+      # ---------------------------------------------------------------- Go 内核
+      #
+      # libnice.aar 是 gomobile 把整个 sing-box 编成三个 ABI 的产物，30 MB 上下，
+      # 因此没有入库（见 .gitignore）。CI 必须自己编，而那要十几到几十分钟。
+      #
+      # 缓存键只取 Go 侧的源码与依赖：绝大多数提交只动 Kotlin，命中缓存后这一整段
+      # 都会跳过。键里带上 NDK 与 Go 版本，因为换工具链必须重编。
+
+      - name: 缓存 libnice.aar
+        id: aar-cache
+        uses: actions/cache@v4
+        with:
+          path: libs/libnice.aar
+          key: libnice-${{ runner.os }}-go${{ env.GO_VERSION }}-ndk${{ env.NDK_VERSION }}-${{ hashFiles('native/libnice/**') }}
+
+      - uses: actions/setup-go@v5
+        if: steps.aar-cache.outputs.cache-hit != 'true'
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: native/libnice/go.sum
+
+      - name: 构建 libnice.aar
+        if: steps.aar-cache.outputs.cache-hit != 'true'
+        # 复用开发机上那份构建脚本，而不是在这里重写一遍 gomobile 命令行。
+        # 构建标签、ldflags、16 KB 对齐校验都很易错，两份实现迟早漂移成
+        # 「本地能过、CI 挂」或者更糟的「都能过但产物不一样」。
+        shell: pwsh
+        run: ./native/libnice/build.ps1
+
+      # ------------------------------------------------------------------ 校验
+
+      - name: 单元测试
+        run: ./gradlew test --no-daemon --stacktrace
+
+      # -------------------------------------------------------------- 构建与签名
+
+      - name: 还原签名密钥
+        id: signing
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          if [ -z "$KEYSTORE_BASE64" ]; then
+            echo "::warning::未配置 KEYSTORE_BASE64，产出的 APK 未签名、无法安装。配置方法见 docs/RELEASING.md"
+            echo "signed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.jks"
+          # 落成文件而不是走环境变量：Gradle 开了配置缓存，
+          # providers.environmentVariable 的变化不会让缓存失效（本地实测），
+          # 密钥会静默不生效、产出「以为签了其实没签」的包。
+          # 文件路径是配置缓存的输入，改了必然重新配置。
+          cat > keystore.properties <<EOF
+          storeFile=$RUNNER_TEMP/release.jks
+          storePassword=$KEYSTORE_PASSWORD
+          keyAlias=$KEY_ALIAS
+          keyPassword=$KEY_PASSWORD
+          EOF
+          echo "signed=true" >> "$GITHUB_OUTPUT"
+
+      - name: 构建 Release APK
+        # 版本号用 -P 传：同样因为环境变量在配置缓存下不可靠
+        run: ./gradlew :app:assembleRelease -PbuildNumber=${{ steps.version.outputs.code }} --no-daemon --stacktrace
+
+      - name: 校验签名与版本
+        env:
+          EXPECT_SIGNED: ${{ steps.signing.outputs.signed }}
+          EXPECT_CODE: ${{ steps.version.outputs.code }}
+        # 「以为签好了其实没签」和「版本号没更新」都是不会报错的失败：
+        # 构建照常成功，产物照常上传，等用户装不上或覆盖不了才发现。这里直接断言。
+        run: |
+          APK=$(ls app/build/outputs/apk/release/app-arm64-v8a-release*.apk | head -n1)
+          BUILD_TOOLS=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -n1)
+
+          ACTUAL_CODE=$("$BUILD_TOOLS/aapt2" dump badging "$APK" | sed -n "s/.*versionCode='\([0-9]*\)'.*/\1/p")
+          if [ "$ACTUAL_CODE" != "$EXPECT_CODE" ]; then
+            echo "::error::versionCode 应为 $EXPECT_CODE，实际为 $ACTUAL_CODE"
+            exit 1
+          fi
+
+          if [ "$EXPECT_SIGNED" = "true" ]; then
+            if ! "$BUILD_TOOLS/apksigner" verify --print-certs "$APK"; then
+              echo "::error::配置了签名密钥，但 APK 未通过签名校验"
+              exit 1
+            fi
+          fi
+          echo "versionCode=$ACTUAL_CODE，签名=$EXPECT_SIGNED"
+
+      - name: 整理产物
+        id: artifacts
+        env:
+          VERSION: ${{ steps.version.outputs.name }}
+        run: |
+          mkdir -p dist
+          for apk in app/build/outputs/apk/release/*.apk; do
+            # app-arm64-v8a-release[-unsigned].apk → NiceProxy-<版本>-arm64-v8a.apk
+            abi=$(basename "$apk" | sed -E 's/^app-(.+)-release(-unsigned)?\.apk$/\1/')
+            cp "$apk" "dist/NiceProxy-${VERSION}-${abi}.apk"
+          done
+          # 附上校验和：从 Release 页直接下 APK 的用户没有别的办法确认文件完整
+          ( cd dist && sha256sum *.apk > SHA256SUMS.txt )
+          ls -lh dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: apk-${{ steps.version.outputs.name }}
+          path: dist/
+          retention-days: 30
+
+      # ------------------------------------------------------------------ 发布
+
+      - name: 生成发布说明
+        id: notes
+        env:
+          VERSION: ${{ steps.version.outputs.name }}
+          SIGNED: ${{ steps.signing.outputs.signed }}
+        run: |
+          {
+            echo "## 安装"
+            echo
+            echo "按手机的 CPU 架构选一个下载，**不确定就选 \`arm64-v8a\`**（2017 年后的机型基本都是）。"
+            echo "\`universal\` 包含全部架构，体积大三倍，只在前者装不上时才需要。"
+            echo
+            if [ "$SIGNED" != "true" ]; then
+              echo "> ⚠️ 本次构建未配置签名密钥，APK **无法直接安装**。"
+              echo
+            fi
+            echo "## 保活提醒"
+            echo
+            echo "装好后请到「设置 → 后台保活」关闭本应用的电池优化。"
+            echo "这不是可选项：不关的话，息屏后系统会挂起网络访问，且服务被杀后无法自动恢复。"
+            echo "国产 ROM 还需在「厂商后台限制」里把本应用加入自启动白名单。"
+            echo
+            echo "## 变更"
+            echo
+            PREV=$(git tag --sort=-creatordate | grep -v "^v${VERSION}$" | head -n1)
+            if [ -n "$PREV" ]; then
+              git log --no-merges --pretty='- %s' "${PREV}..HEAD"
+            else
+              git log --no-merges --pretty='- %s' -20
+            fi
+          } > release-notes.md
+          cat release-notes.md
+
+      - name: 发布到 Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.name }}
+          PRERELEASE: ${{ steps.version.outputs.prerelease }}
+        run: |
+          TAG="v${VERSION}"
+          FLAGS=""
+          [ "$PRERELEASE" = "true" ] && FLAGS="--prerelease"
+          # 重跑同一次构建时删掉旧的重建，否则 gh release create 会因标签已存在而失败
+          gh release delete "$TAG" --yes --cleanup-tag 2>/dev/null || true
+          gh release create "$TAG" dist/* \
+            --title "$TAG" \
+            --notes-file release-notes.md \
+            --target "$GITHUB_SHA" \
+            $FLAGS
