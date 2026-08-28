@@ -72,12 +72,34 @@ class RoutingViewModel @Inject constructor(
 
     fun moveRule(from: Int, to: Int) {
         val current = uiState.value.rules.toMutableList()
-        if (from !in current.indices || to !in current.indices) return
+        if (from !in current.indices || to !in current.indices || from == to) return
         current.add(to, current.removeAt(from))
         viewModelScope.launch {
             repository.reorder(current)
             markCustom()
         }
+    }
+
+    /**
+     * 一步挪到列表两端。
+     *
+     * 分流规则「命中即停」，所以位置就是优先级。二三十条规则的列表里，
+     * 靠反复点上移把一条规则送到最前面要点二三十次，中途还会因为列表
+     * 重排而看丢自己在操作哪一条。
+     */
+    fun moveRuleToTop(index: Int) = moveRule(index, 0)
+
+    fun moveRuleToBottom(index: Int) = moveRule(index, uiState.value.rules.lastIndex)
+
+    /**
+     * 「套用模板时保留」。
+     *
+     * 刻意**不**调用 [markCustom]：这一位只影响下次套用预设时留不留它，
+     * 不改变任何一条流量的走向。把它算作「用户改过规则」会让预设模式的
+     * 高亮无端消失，而用户并没有动过分流本身。
+     */
+    fun setRuleLocked(id: String, locked: Boolean) {
+        viewModelScope.launch { repository.setRuleLocked(id, locked) }
     }
 
     /**

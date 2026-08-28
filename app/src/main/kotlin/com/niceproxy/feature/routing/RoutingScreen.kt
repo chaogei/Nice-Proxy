@@ -24,7 +24,10 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.LockOpen
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.VerticalAlignBottom
+import androidx.compose.material.icons.filled.VerticalAlignTop
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -43,10 +46,14 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.niceproxy.R
 import com.niceproxy.core.designsystem.component.GlassPanel
 import com.niceproxy.core.designsystem.component.LocalHazeState
 import com.niceproxy.core.designsystem.component.SectionTitle
@@ -67,6 +74,7 @@ fun RoutingScreen(
     var banner by remember { mutableStateOf<String?>(null) }
     var pendingMode by remember { mutableStateOf<RoutingMode?>(null) }
     var pendingDeleteRule by remember { mutableStateOf<RoutingRule?>(null) }
+    var pendingUnlockRule by remember { mutableStateOf<RoutingRule?>(null) }
 
     LaunchedEffect(message) {
         message?.let {
@@ -88,13 +96,16 @@ fun RoutingScreen(
         item {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    text = "分流",
+                    text = stringResource(R.string.routing_title),
                     style = MaterialTheme.typography.headlineSmall,
                     fontWeight = FontWeight.Bold,
                     modifier = Modifier.weight(1f),
                 )
                 IconButton(onClick = onAddRule) {
-                    Icon(Icons.Default.Add, contentDescription = "添加规则")
+                    Icon(
+                        Icons.Default.Add,
+                        contentDescription = stringResource(R.string.routing_add_rule),
+                    )
                 }
             }
         }
@@ -147,15 +158,15 @@ fun RoutingScreen(
             )
         }
 
-        item { SectionTitle("规则（自上而下匹配，命中即停）") }
+        item { SectionTitle(stringResource(R.string.routing_rules_section)) }
 
         if (state.rules.isEmpty()) {
             item {
                 Text(
                     text = if (state.mode == RoutingMode.GLOBAL_PROXY) {
-                        "全局代理模式无需规则，所有流量都走上游节点。"
+                        stringResource(R.string.routing_empty_global)
                     } else {
-                        "还没有规则。选一个预设模式，或手动添加。"
+                        stringResource(R.string.routing_empty)
                     },
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -172,13 +183,17 @@ fun RoutingScreen(
                     onToggle = { viewModel.setRuleEnabled(rule.id, it) },
                     onMoveUp = { viewModel.moveRule(index, index - 1) },
                     onMoveDown = { viewModel.moveRule(index, index + 1) },
+                    onMoveToTop = { viewModel.moveRuleToTop(index) },
+                    onMoveToBottom = { viewModel.moveRuleToBottom(index) },
+                    onLock = { viewModel.setRuleLocked(rule.id, true) },
+                    onUnlock = { pendingUnlockRule = rule },
                     onDelete = { pendingDeleteRule = rule },
                 )
             }
         }
 
         if (state.ruleSets.isNotEmpty()) {
-            item { SectionTitle("规则集") }
+            item { SectionTitle(stringResource(R.string.routing_rulesets_section)) }
             items(state.ruleSets, key = { it.id }) { ruleSet ->
                 GlassPanel(
                     hazeState = LocalHazeState.current,
@@ -201,23 +216,18 @@ fun RoutingScreen(
         val doomed = state.rules.count { !it.locked }
         AlertDialog(
             onDismissRequest = { pendingMode = null },
-            title = { Text("套用「${mode.displayName}」") },
-            text = {
-                Text(
-                    "预设模式会整体替换规则列表：当前 $doomed 条未锁定的规则将被删除，" +
-                        "已锁定的会保留。此操作不可撤销。\n\n" +
-                        "想留下某条手写规则，可以先取消，打开那条规则的" +
-                        "「套用模板时保留」再回来。",
-                )
-            },
+            title = { Text(stringResource(R.string.routing_apply_title, mode.displayName)) },
+            text = { Text(stringResource(R.string.routing_apply_message, doomed)) },
             confirmButton = {
                 TextButton(onClick = {
                     viewModel.setMode(mode)
                     pendingMode = null
-                }) { Text("套用") }
+                }) { Text(stringResource(R.string.routing_apply_confirm)) }
             },
             dismissButton = {
-                TextButton(onClick = { pendingMode = null }) { Text("取消") }
+                TextButton(onClick = { pendingMode = null }) {
+                    Text(stringResource(R.string.common_cancel))
+                }
             },
         )
     }
@@ -225,21 +235,39 @@ fun RoutingScreen(
     pendingDeleteRule?.let { rule ->
         AlertDialog(
             onDismissRequest = { pendingDeleteRule = null },
-            title = { Text("删除规则") },
-            text = {
-                Text(
-                    "「${rule.name}」将被删除，此操作不可撤销。" +
-                        "命中它的流量会改由后面的规则或默认出站处理。",
-                )
-            },
+            title = { Text(stringResource(R.string.routing_delete_title)) },
+            text = { Text(stringResource(R.string.routing_delete_message, rule.name)) },
             confirmButton = {
                 TextButton(onClick = {
                     viewModel.deleteRule(rule.id)
                     pendingDeleteRule = null
-                }) { Text("删除") }
+                }) { Text(stringResource(R.string.common_delete)) }
             },
             dismissButton = {
-                TextButton(onClick = { pendingDeleteRule = null }) { Text("取消") }
+                TextButton(onClick = { pendingDeleteRule = null }) {
+                    Text(stringResource(R.string.common_cancel))
+                }
+            },
+        )
+    }
+
+    // 解锁本身不改分流，但它的后果要到「下一次套用预设」才显现，
+    // 而那时规则已经没了。只有在这里说清楚，用户才有机会反悔。
+    pendingUnlockRule?.let { rule ->
+        AlertDialog(
+            onDismissRequest = { pendingUnlockRule = null },
+            title = { Text(stringResource(R.string.routing_unlock_title, rule.name)) },
+            text = { Text(stringResource(R.string.routing_unlock_message)) },
+            confirmButton = {
+                TextButton(onClick = {
+                    viewModel.setRuleLocked(rule.id, false)
+                    pendingUnlockRule = null
+                }) { Text(stringResource(R.string.routing_unlock)) }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingUnlockRule = null }) {
+                    Text(stringResource(R.string.common_cancel))
+                }
             },
         )
     }
@@ -263,9 +291,20 @@ private fun RuleRow(
     onToggle: (Boolean) -> Unit,
     onMoveUp: () -> Unit,
     onMoveDown: () -> Unit,
+    onMoveToTop: () -> Unit,
+    onMoveToBottom: () -> Unit,
+    onLock: () -> Unit,
+    onUnlock: () -> Unit,
     onDelete: () -> Unit,
 ) {
     var menuOpen by remember { mutableStateOf(false) }
+    // 读屏软件在这一列上会连着念好几遍「上移」「开关」，不带规则名就分不清
+    // 自己在操作哪一条 —— 而这一列每个动作都会改变流量的走向。
+    val moveUpLabel = stringResource(R.string.routing_move_up) + " " + rule.name
+    val moveDownLabel = stringResource(R.string.routing_move_down) + " " + rule.name
+    val toggleLabel = stringResource(R.string.routing_rule_enabled, rule.name)
+    val menuLabel = stringResource(R.string.routing_rule_menu, rule.name)
+
     GlassPanel(
         hazeState = LocalHazeState.current,
         modifier = Modifier.fillMaxWidth(),
@@ -280,50 +319,113 @@ private fun RuleRow(
                         Spacer(Modifier.width(6.dp))
                         Icon(
                             Icons.Default.Lock,
-                            contentDescription = "套用模板时保留",
+                            contentDescription = stringResource(R.string.routing_locked_badge),
                             modifier = Modifier.size(13.dp),
                             tint = MaterialTheme.colorScheme.primary,
                         )
                     }
                 }
                 Text(
-                    text = "${rule.matcher.summary()} → ${rule.action.summary()}",
+                    text = stringResource(
+                        R.string.routing_rule_summary,
+                        rule.matcher.summary(),
+                        rule.action.summary(),
+                    ),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 2,
                 )
             }
             // 四个控件原来挤在一起，其中三个小于 48dp，而最靠边那个还是不可逆的删除。
-            // 上移/下移改回默认 48dp，删除挪进溢出菜单并加确认。
+            // 上移/下移是默认 48dp 的 IconButton，删除与「移到两端」在溢出菜单里，
+            // 删除还要再确认一次。
             Column {
                 IconButton(onClick = onMoveUp, enabled = canMoveUp) {
                     Icon(
                         Icons.Default.ArrowUpward,
-                        contentDescription = "上移",
+                        contentDescription = moveUpLabel,
                         modifier = Modifier.size(18.dp),
                     )
                 }
                 IconButton(onClick = onMoveDown, enabled = canMoveDown) {
                     Icon(
                         Icons.Default.ArrowDownward,
-                        contentDescription = "下移",
+                        contentDescription = moveDownLabel,
                         modifier = Modifier.size(18.dp),
                     )
                 }
             }
             Spacer(Modifier.width(4.dp))
-            Switch(checked = rule.enabled, onCheckedChange = onToggle)
+            Switch(
+                checked = rule.enabled,
+                onCheckedChange = onToggle,
+                modifier = Modifier.semantics { contentDescription = toggleLabel },
+            )
             Box {
                 IconButton(onClick = { menuOpen = true }) {
                     Icon(
                         Icons.Default.MoreVert,
-                        contentDescription = "更多操作",
+                        contentDescription = menuLabel,
                         modifier = Modifier.size(18.dp),
                     )
                 }
                 DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                    // 「命中即停」意味着位置就是优先级。二三十条规则里靠点上移
+                    // 把一条送到最前面要点二三十次，中途还会看丢是哪一条。
                     DropdownMenuItem(
-                        text = { Text("删除", color = MaterialTheme.colorScheme.error) },
+                        text = { Text(stringResource(R.string.routing_move_top)) },
+                        leadingIcon = {
+                            Icon(Icons.Default.VerticalAlignTop, contentDescription = null)
+                        },
+                        enabled = canMoveUp,
+                        onClick = {
+                            menuOpen = false
+                            onMoveToTop()
+                        },
+                    )
+                    DropdownMenuItem(
+                        text = { Text(stringResource(R.string.routing_move_bottom)) },
+                        leadingIcon = {
+                            Icon(Icons.Default.VerticalAlignBottom, contentDescription = null)
+                        },
+                        enabled = canMoveDown,
+                        onClick = {
+                            menuOpen = false
+                            onMoveToBottom()
+                        },
+                    )
+                    // 「套用模板时保留」以前只能在规则编辑页里翻到，而用户想到
+                    // 要用它的时刻，恰恰是站在这份即将被模板替换掉的列表前面。
+                    DropdownMenuItem(
+                        text = {
+                            Text(
+                                stringResource(
+                                    if (rule.locked) {
+                                        R.string.routing_unlock
+                                    } else {
+                                        R.string.routing_lock
+                                    },
+                                ),
+                            )
+                        },
+                        leadingIcon = {
+                            Icon(
+                                if (rule.locked) Icons.Default.LockOpen else Icons.Default.Lock,
+                                contentDescription = null,
+                            )
+                        },
+                        onClick = {
+                            menuOpen = false
+                            if (rule.locked) onUnlock() else onLock()
+                        },
+                    )
+                    DropdownMenuItem(
+                        text = {
+                            Text(
+                                stringResource(R.string.common_delete),
+                                color = MaterialTheme.colorScheme.error,
+                            )
+                        },
                         onClick = {
                             menuOpen = false
                             onDelete()
