@@ -74,6 +74,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
@@ -120,15 +121,27 @@ class MonitorViewModel @Inject constructor(
      */
     private val history = TrafficHistory()
 
+    /**
+     * 手动重连的计数器。
+     *
+     * 流一旦 `catch` 掉就结束了，不会自己回来 —— 于是内核明明还在跑，页面却
+     * 停在一句错误上，只有退出去再进来才恢复。让它参与到订阅的重建条件里，
+     * 「重试」就是加一。
+     */
+    private val retries = MutableStateFlow(0)
+
     init {
         // 在 Default 上收集：连接快照可能上千条，排序不能占主线程。
         // Clash API 每秒推一次，主线程上排序会稳定地吃掉帧预算。
         viewModelScope.launch(Dispatchers.Default) {
-            controller.state
-                .map { it is ProxyState.Running }
-                // 不去重的话，Running 里任何一个字段变化（比如 warnings）都会
-                // 重建三条 WebSocket，曲线跟着断一次
-                .distinctUntilChanged()
+            combine(
+                controller.state
+                    .map { it is ProxyState.Running }
+                    // 不去重的话，Running 里任何一个字段变化（比如 warnings）都会
+                    // 重建三条 WebSocket，曲线跟着断一次
+                    .distinctUntilChanged(),
+                retries,
+            ) { running, _ -> running }
                 .collectLatest { running ->
                     if (!running) {
                         history.clear()
@@ -194,6 +207,13 @@ class MonitorViewModel @Inject constructor(
         } else {
             Log.d(TAG, "内核已停止，${what}订阅正常结束")
         }
+    }
+
+    /** 重新建立三条订阅。内核没在跑的时候没什么可重连的。 */
+    fun retry() {
+        if (!_uiState.value.running) return
+        _uiState.value = _uiState.value.copy(streamError = null)
+        retries.value++
     }
 
     fun close(id: String) {
@@ -329,13 +349,25 @@ fun MonitorScreen(
                 return@Column
             }
 
+            // 断流之后列表就永远停在原地了。以前唯一的出路是退出本页再进来，
+            // 而界面上没有任何地方提到这一点。
             state.streamError?.let { error ->
-                Text(
-                    text = stringResource(R.string.monitor_stream_error, error),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.error,
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
-                )
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = stringResource(R.string.monitor_stream_error, error),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.weight(1f),
+                    )
+                    TextButton(onClick = viewModel::retry) {
+                        Text(stringResource(R.string.common_retry))
+                    }
+                }
             }
 
             ThroughputPanel(samples = state.samples, memoryInUse = state.memoryInUse)

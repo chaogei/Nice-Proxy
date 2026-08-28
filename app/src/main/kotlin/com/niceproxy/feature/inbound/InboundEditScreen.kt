@@ -2,10 +2,12 @@ package com.niceproxy.feature.inbound
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.asPaddingValues
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -36,13 +38,17 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.niceproxy.R
 import com.niceproxy.core.designsystem.component.GlassPanel
 import com.niceproxy.core.designsystem.component.LocalHazeState
 import com.niceproxy.core.model.InboundType
@@ -63,21 +69,26 @@ fun InboundEditScreen(
     if (confirmDelete) {
         AlertDialog(
             onDismissRequest = { confirmDelete = false },
-            title = { Text("删除入站") },
+            title = { Text(stringResource(R.string.inbound_delete_title)) },
             text = {
                 Text(
-                    "「${state.type.displayName} · ${state.portText}」将被删除。" +
-                        "正指着这个端口的设备会立刻失去代理，此操作不可撤销。",
+                    stringResource(
+                        R.string.inbound_delete_message,
+                        stringResource(state.type.labelRes()),
+                        state.portText,
+                    ),
                 )
             },
             confirmButton = {
                 TextButton(onClick = {
                     confirmDelete = false
                     viewModel.delete()
-                }) { Text("删除") }
+                }) { Text(stringResource(R.string.common_delete)) }
             },
             dismissButton = {
-                TextButton(onClick = { confirmDelete = false }) { Text("取消") }
+                TextButton(onClick = { confirmDelete = false }) {
+                    Text(stringResource(R.string.common_cancel))
+                }
             },
         )
     }
@@ -98,10 +109,19 @@ fun InboundEditScreen(
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = onNavigateBack) {
-                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
+                Icon(
+                    Icons.AutoMirrored.Filled.ArrowBack,
+                    contentDescription = stringResource(R.string.common_back),
+                )
             }
             Text(
-                text = if (state.isNew) "新建入站" else "编辑入站",
+                text = stringResource(
+                    if (state.isNew) {
+                        R.string.inbound_edit_title_new
+                    } else {
+                        R.string.inbound_edit_title
+                    },
+                ),
                 style = MaterialTheme.typography.headlineSmall,
                 fontWeight = FontWeight.Bold,
                 modifier = Modifier.weight(1f),
@@ -110,7 +130,7 @@ fun InboundEditScreen(
                 IconButton(onClick = { confirmDelete = true }) {
                     Icon(
                         Icons.Default.Delete,
-                        contentDescription = "删除",
+                        contentDescription = stringResource(R.string.common_delete),
                         tint = MaterialTheme.colorScheme.error,
                     )
                 }
@@ -122,8 +142,11 @@ fun InboundEditScreen(
             modifier = Modifier.fillMaxWidth(),
             contentPadding = 16.dp,
         ) {
-            Text("类型", style = MaterialTheme.typography.titleSmall)
-            androidx.compose.foundation.layout.FlowRow(
+            Text(
+                text = stringResource(R.string.inbound_type_section),
+                style = MaterialTheme.typography.titleSmall,
+            )
+            FlowRow(
                 modifier = Modifier.padding(top = 10.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
@@ -131,12 +154,12 @@ fun InboundEditScreen(
                     FilterChip(
                         selected = state.type == type,
                         onClick = { viewModel.setType(type) },
-                        label = { Text(type.displayName) },
+                        label = { Text(stringResource(type.labelRes())) },
                     )
                 }
             }
             Text(
-                text = state.type.description,
+                text = stringResource(state.type.descriptionRes()),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(top = 8.dp),
@@ -148,17 +171,20 @@ fun InboundEditScreen(
             modifier = Modifier.fillMaxWidth(),
             contentPadding = 16.dp,
         ) {
-            Text("监听地址", style = MaterialTheme.typography.titleSmall)
+            Text(
+                text = stringResource(R.string.inbound_listen_section),
+                style = MaterialTheme.typography.titleSmall,
+            )
             Column(modifier = Modifier.selectableGroup().padding(top = 6.dp)) {
                 ListenOption(
-                    label = "所有接口（0.0.0.0）",
-                    hint = "局域网内的其他设备可以连接",
+                    label = stringResource(R.string.inbound_listen_all),
+                    hint = stringResource(R.string.inbound_listen_all_hint),
                     selected = state.listenAll,
                     onSelect = { viewModel.setListenAll(true) },
                 )
                 ListenOption(
-                    label = "仅本机（127.0.0.1）",
-                    hint = "只有这台设备上的应用能连接",
+                    label = stringResource(R.string.inbound_listen_local),
+                    hint = stringResource(R.string.inbound_listen_local_hint),
                     selected = !state.listenAll,
                     onSelect = { viewModel.setListenAll(false) },
                 )
@@ -167,13 +193,14 @@ fun InboundEditScreen(
             OutlinedTextField(
                 value = state.portText,
                 onValueChange = viewModel::setPort,
-                label = { Text("端口") },
+                label = { Text(stringResource(R.string.inbound_port)) },
                 singleLine = true,
                 isError = state.portError != null,
                 supportingText = {
                     when (state.portError) {
-                        PortError.OUT_OF_RANGE -> Text("端口需在 1025–65535 之间")
-                        PortError.TAKEN -> Text("该端口已被其他入站占用")
+                        PortError.OUT_OF_RANGE ->
+                            Text(stringResource(R.string.inbound_port_out_of_range))
+                        PortError.TAKEN -> Text(stringResource(R.string.inbound_port_taken))
                         null -> Unit
                     }
                 },
@@ -192,17 +219,27 @@ fun InboundEditScreen(
                 modifier = Modifier.fillMaxWidth(),
                 contentPadding = 16.dp,
             ) {
-                Text("使用方式", style = MaterialTheme.typography.titleSmall)
                 Text(
-                    text = "在客户端的「自动代理配置」里填入 " +
-                        "http://<本机 IP>:${state.portText.ifBlank { "端口" }}/proxy.pac\n\n" +
-                        "脚本会按客户端实际访问的地址动态生成，" +
-                        "局域网与本机地址自动绕行。之后改端口或换网络都不必再动客户端。",
+                    text = stringResource(R.string.inbound_pac_section),
+                    style = MaterialTheme.typography.titleSmall,
+                )
+                Text(
+                    text = stringResource(
+                        R.string.inbound_pac_hint,
+                        state.portText.ifBlank {
+                            stringResource(R.string.inbound_pac_port_placeholder)
+                        },
+                    ),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(top = 6.dp),
                 )
-                SwitchRow("启用", state.enabled, viewModel::setEnabled, topPadding = 12.dp)
+                SwitchRow(
+                    label = stringResource(R.string.inbound_enabled),
+                    checked = state.enabled,
+                    onCheckedChange = viewModel::setEnabled,
+                    topPadding = 12.dp,
+                )
             }
 
             Button(
@@ -210,7 +247,7 @@ fun InboundEditScreen(
                 enabled = state.canSave,
                 modifier = Modifier.fillMaxWidth(),
             ) {
-                Text("保存")
+                Text(stringResource(R.string.common_save))
             }
             return@Column
         }
@@ -220,12 +257,16 @@ fun InboundEditScreen(
             modifier = Modifier.fillMaxWidth(),
             contentPadding = 16.dp,
         ) {
-            SwitchRow("启用认证", state.authEnabled, viewModel::setAuthEnabled)
+            SwitchRow(
+                label = stringResource(R.string.inbound_auth_enabled),
+                checked = state.authEnabled,
+                onCheckedChange = viewModel::setAuthEnabled,
+            )
             if (state.authEnabled) {
                 OutlinedTextField(
                     value = state.username,
                     onValueChange = viewModel::setUsername,
-                    label = { Text("用户名") },
+                    label = { Text(stringResource(R.string.inbound_username)) },
                     singleLine = true,
                     modifier = Modifier
                         .fillMaxWidth()
@@ -234,7 +275,7 @@ fun InboundEditScreen(
                 OutlinedTextField(
                     value = state.password,
                     onValueChange = viewModel::setPassword,
-                    label = { Text("密码") },
+                    label = { Text(stringResource(R.string.inbound_password)) },
                     singleLine = true,
                     visualTransformation = PasswordVisualTransformation(),
                     modifier = Modifier
@@ -243,14 +284,23 @@ fun InboundEditScreen(
                 )
             } else if (state.listenAll) {
                 Text(
-                    text = "监听所有接口且未启用认证时，同一网络下的任何设备都能使用这个代理。",
+                    text = stringResource(R.string.inbound_open_warning),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.error,
                     modifier = Modifier.padding(top = 4.dp),
                 )
             }
-            SwitchRow("允许 UDP 转发", state.udpEnabled, viewModel::setUdpEnabled, topPadding = 10.dp)
-            SwitchRow("启用", state.enabled, viewModel::setEnabled)
+            SwitchRow(
+                label = stringResource(R.string.inbound_udp),
+                checked = state.udpEnabled,
+                onCheckedChange = viewModel::setUdpEnabled,
+                topPadding = 10.dp,
+            )
+            SwitchRow(
+                label = stringResource(R.string.inbound_enabled),
+                checked = state.enabled,
+                onCheckedChange = viewModel::setEnabled,
+            )
         }
 
         Button(
@@ -258,7 +308,7 @@ fun InboundEditScreen(
             enabled = state.canSave,
             modifier = Modifier.fillMaxWidth(),
         ) {
-            Text("保存")
+            Text(stringResource(R.string.common_save))
         }
     }
 }
@@ -275,6 +325,7 @@ private fun ListenOption(
             .fillMaxWidth()
             // 整行可点，而不是只有小圆点可点
             .selectable(selected = selected, onClick = onSelect, role = Role.RadioButton)
+            .defaultMinSize(minHeight = 48.dp)
             .padding(vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -300,11 +351,19 @@ private fun SwitchRow(
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            .defaultMinSize(minHeight = 48.dp)
             .padding(top = topPadding, bottom = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween,
     ) {
         Text(label, style = MaterialTheme.typography.bodyLarge)
-        Switch(checked = checked, onCheckedChange = onCheckedChange)
+        // 这一页上有三个开关，读屏软件对它们一律念「开关，已开启」。
+        // 其中一个控制的是「要不要认证」—— 弄错了就等于把代理向整个
+        // 局域网敞开，而用户听不出自己拨的是哪一个。
+        Switch(
+            checked = checked,
+            onCheckedChange = onCheckedChange,
+            modifier = Modifier.semantics { contentDescription = label },
+        )
     }
 }

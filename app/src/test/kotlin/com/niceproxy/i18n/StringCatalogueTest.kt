@@ -1,6 +1,7 @@
 package com.niceproxy.i18n
 
 import com.google.common.truth.Truth.assertThat
+import com.google.common.truth.Truth.assertWithMessage
 import org.junit.jupiter.api.Test
 import org.w3c.dom.Element
 import java.io.File
@@ -75,8 +76,55 @@ class StringCatalogueTest {
         assertThat(positional).isEmpty()
     }
 
+    /**
+     * AAPT 也会拦下重复的键，但只在打包资源时报错，而那一步在很多本地循环里
+     * （只跑 `compileKotlin`、只跑单测）根本不会执行。更要紧的是，第二份定义
+     * 会静默覆盖第一份，所以在报错之前它已经能把你改对的文案换回旧的了。
+     */
+    @Test
+    fun `no key is defined twice`() {
+        listOf("values", "values-en").forEach { qualifier ->
+            val duplicates = names(qualifier)
+                .groupingBy { it }
+                .eachCount()
+                .filterValues { it > 1 }
+                .keys
+
+            assertWithMessage(qualifier).that(duplicates).isEmpty()
+        }
+    }
+
+    /**
+     * 没人引用的键不会报错，只会一直躺在两份目录里等着被翻译、被复查。
+     * 上一批就有整整十六条从没接上过界面。
+     */
+    @Test
+    fun `every string is referenced from kotlin or xml`() {
+        val sources = File("src/main")
+            .walkTopDown()
+            .filter { it.isFile && it.extension in REFERENCING_EXTENSIONS }
+            .filterNot { it.toPath().contains(File("res/values").toPath()) }
+            .joinToString("\n") { it.readText() }
+
+        val unused = defaults.keys.filterNot { key ->
+            sources.contains("R.string.$key") ||
+                sources.contains("@string/$key") ||
+                // 同一份 XML 里也可能互相引用（例如 locales_config、shortcuts）
+                XML_REFERENCE.containsMatchIn(key)
+        }
+
+        assertThat(unused).isEmpty()
+    }
+
     private fun placeholders(value: String): Set<String> =
         INDEXED.findAll(value).map { it.value }.toSet()
+
+    private fun names(qualifier: String): List<String> {
+        val file = File(RES_DIR, "$qualifier/strings.xml")
+        val document = DocumentBuilderFactory.newInstance().newDocumentBuilder().parse(file)
+        val nodes = document.getElementsByTagName("string")
+        return (0 until nodes.length).map { (nodes.item(it) as Element).getAttribute("name") }
+    }
 
     private fun parse(qualifier: String): Map<String, String> {
         val file = File(RES_DIR, "$qualifier/strings.xml")
@@ -100,6 +148,11 @@ class StringCatalogueTest {
          * 「另一种语言少了这条」。
          */
         val RES_DIR = File("src/main/res")
+
+        val REFERENCING_EXTENSIONS = setOf("kt", "xml")
+
+        /** 不该被当成「没用到」的键：清单与快捷方式引用的那些。 */
+        val XML_REFERENCE = Regex("^(app_name|shortcut_|permission_)")
 
         val INDEXED = Regex("""%\d+\$[a-zA-Z]""")
         val POSITIONAL = Regex("""%(?!\d+\$)(?!%)[-#+ 0,(]*\d*(?:\.\d+)?[a-zA-Z]""")
