@@ -22,6 +22,14 @@
     <string name="common_close">Close</string>
     <string name="common_retry">Retry</string>
 
+    <!-- ============================ Navigation ============================ -->
+    <string name="nav_home">Home</string>
+    <string name="nav_nodes">Nodes</string>
+    <string name="nav_routing">Routing</string>
+    <string name="nav_more">More</string>
+    <string name="shell_config_outdated">Configuration changed</string>
+    <string name="shell_config_apply">Apply</string>
+
     <!-- ============================ Home ============================ -->
     <string name="home_title">Nice Proxy</string>
     <string name="home_refresh_network">Refresh network info</string>

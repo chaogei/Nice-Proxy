@@ -23,6 +23,14 @@
     <string name="common_close">关闭</string>
     <string name="common_retry">重试</string>
 
+    <!-- ============================ 导航 ============================ -->
+    <string name="nav_home">首页</string>
+    <string name="nav_nodes">节点</string>
+    <string name="nav_routing">分流</string>
+    <string name="nav_more">更多</string>
+    <string name="shell_config_outdated">配置已变更</string>
+    <string name="shell_config_apply">应用</string>
+
     <!-- ============================ 首页 ============================ -->
     <string name="home_title">Nice Proxy</string>
     <string name="home_refresh_network">刷新网络信息</string>

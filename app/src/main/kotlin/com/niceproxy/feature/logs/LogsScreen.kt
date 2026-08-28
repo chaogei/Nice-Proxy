@@ -38,12 +38,14 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.niceproxy.R
 import com.niceproxy.core.designsystem.component.GlassPanel
 import com.niceproxy.core.designsystem.component.LocalHazeState
 import com.niceproxy.core.datastore.SettingsDataStore
@@ -112,8 +114,7 @@ class LogsViewModel @Inject constructor(
                     .catch { error ->
                         if (controller.state.value is ProxyState.Running) {
                             Log.w(TAG, "日志订阅中断，内核仍在运行", error)
-                            _streamError.value = "日志流已断开（${error.describe()}）。" +
-                                "代理本身可能仍在正常工作，返回后重进本页可重试。"
+                            _streamError.value = error.describe()
                         } else {
                             Log.d(TAG, "内核已停止，日志订阅正常结束")
                         }
@@ -195,10 +196,13 @@ fun LogsScreen(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 IconButton(onClick = onNavigateBack) {
-                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
+                    Icon(
+                        Icons.AutoMirrored.Filled.ArrowBack,
+                        contentDescription = stringResource(R.string.common_back),
+                    )
                 }
                 Text(
-                    text = "运行日志",
+                    text = stringResource(R.string.logs_title),
                     style = MaterialTheme.typography.headlineSmall,
                     fontWeight = FontWeight.Bold,
                     modifier = Modifier.weight(1f),
@@ -209,28 +213,34 @@ fun LogsScreen(
                         // 点完和没点一模一样。日志里有服务器地址和节点名，标记为敏感。
                         val text = viewModel.exportText()
                         val feedback = if (text.isBlank()) {
-                            "日志为空，没有可复制的内容"
+                            context.getString(R.string.logs_empty_copy)
                         } else {
                             context.copyToClipboard(
-                                label = "Nice Proxy 运行日志",
+                                label = context.getString(R.string.logs_clipboard_label),
                                 text = text,
                                 sensitive = true,
                             )
-                            "已复制 ${lines.size} 行日志到剪贴板"
+                            context.getString(R.string.logs_copied, lines.size)
                         }
                         scope.launch { snackbarHostState.showSnackbar(feedback) }
                     },
                 ) {
-                    Icon(Icons.Default.ContentCopy, contentDescription = "复制全部日志")
+                    Icon(
+                        Icons.Default.ContentCopy,
+                        contentDescription = stringResource(R.string.logs_copy_all),
+                    )
                 }
                 IconButton(onClick = viewModel::clear) {
-                    Icon(Icons.Default.DeleteSweep, contentDescription = "清空")
+                    Icon(
+                        Icons.Default.DeleteSweep,
+                        contentDescription = stringResource(R.string.logs_clear),
+                    )
                 }
             }
 
             if (!running) {
                 Text(
-                    text = "代理未运行，日志将在启动后开始输出。",
+                    text = stringResource(R.string.logs_not_running),
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(16.dp),
@@ -239,7 +249,7 @@ fun LogsScreen(
 
             streamError?.let { error ->
                 Text(
-                    text = error,
+                    text = stringResource(R.string.logs_stream_error, error),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.error,
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),

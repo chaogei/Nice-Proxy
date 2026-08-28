@@ -15,8 +15,9 @@ import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.ArrowForwardIos
-import androidx.compose.material.icons.outlined.Article
+import androidx.compose.material.icons.automirrored.outlined.ArrowForwardIos
+import androidx.compose.material.icons.automirrored.outlined.Article
+import androidx.compose.material.icons.outlined.DataObject
 import androidx.compose.material.icons.outlined.Insights
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.Icon
@@ -26,8 +27,10 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.niceproxy.R
 import com.niceproxy.core.designsystem.component.GlassPanel
 import com.niceproxy.core.designsystem.component.LocalHazeState
 
@@ -37,6 +40,7 @@ fun MoreScreen(
     onOpenLogs: () -> Unit,
     onOpenMonitor: () -> Unit,
     onOpenSettings: () -> Unit,
+    onOpenConfigPreview: () -> Unit,
 ) {
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -50,7 +54,7 @@ fun MoreScreen(
     ) {
         item {
             Text(
-                text = "更多",
+                text = stringResource(R.string.more_title),
                 style = MaterialTheme.typography.headlineSmall,
                 fontWeight = FontWeight.Bold,
                 modifier = Modifier.padding(bottom = 4.dp),
@@ -59,25 +63,35 @@ fun MoreScreen(
         item {
             EntryRow(
                 icon = Icons.Outlined.Insights,
-                title = "连接监控",
-                subtitle = "查看哪台设备在访问什么",
+                title = stringResource(R.string.more_monitor_title),
+                subtitle = stringResource(R.string.more_monitor_subtitle),
                 onClick = onOpenMonitor,
             )
         }
         item {
             EntryRow(
-                icon = Icons.Outlined.Article,
-                title = "运行日志",
-                subtitle = "内核实时日志，排查问题时用",
+                icon = Icons.AutoMirrored.Outlined.Article,
+                title = stringResource(R.string.more_logs_title),
+                subtitle = stringResource(R.string.more_logs_subtitle),
                 onClick = onOpenLogs,
             )
         }
         item {
             EntryRow(
                 icon = Icons.Outlined.Settings,
-                title = "设置",
-                subtitle = "DNS、出站网卡、开机自启",
+                title = stringResource(R.string.more_settings_title),
+                subtitle = stringResource(R.string.more_settings_subtitle),
                 onClick = onOpenSettings,
+            )
+        }
+        item {
+            // 排在最后：这一项对绝大多数人没有意义，而对需要它的人来说，
+            // 它是「代理为什么起不来」唯一能自查的地方。
+            EntryRow(
+                icon = Icons.Outlined.DataObject,
+                title = stringResource(R.string.more_expert_title),
+                subtitle = stringResource(R.string.more_expert_subtitle),
+                onClick = onOpenConfigPreview,
             )
         }
     }
@@ -113,7 +127,7 @@ private fun EntryRow(
                 )
             }
             Icon(
-                Icons.Outlined.ArrowForwardIos,
+                Icons.AutoMirrored.Outlined.ArrowForwardIos,
                 contentDescription = null,
                 modifier = Modifier.size(14.dp),
                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
