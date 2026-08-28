@@ -53,16 +53,22 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.niceproxy.R
 import com.niceproxy.core.designsystem.component.GlassPanel
 import com.niceproxy.core.designsystem.component.GlowCircle
 import com.niceproxy.core.designsystem.component.LocalHazeState
 import com.niceproxy.core.designsystem.component.SectionTitle
+import com.niceproxy.core.designsystem.component.Sparkline
+import com.niceproxy.core.designsystem.component.SparklinePlaceholder
 import com.niceproxy.core.designsystem.component.formatSpeed
 import com.niceproxy.core.designsystem.theme.StatusColors
 import kotlinx.coroutines.delay
@@ -72,6 +78,7 @@ import com.niceproxy.core.service.ProxyState
 import com.niceproxy.core.service.network.LocalAddress
 import com.niceproxy.keepalive.KeepAlive
 import com.niceproxy.keepalive.rememberIgnoringBatteryOptimizations
+import com.niceproxy.traffic.TrafficSamples
 
 @Composable
 fun HomeScreen(
@@ -117,13 +124,16 @@ fun HomeScreen(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text(
-                        text = "Nice Proxy",
+                        text = stringResource(R.string.home_title),
                         style = MaterialTheme.typography.headlineSmall,
                         fontWeight = FontWeight.Bold,
                         modifier = Modifier.weight(1f),
                     )
                     IconButton(onClick = viewModel::refreshNetworkInfo) {
-                        Icon(Icons.Default.Refresh, contentDescription = "刷新网络信息")
+                        Icon(
+                            Icons.Default.Refresh,
+                            contentDescription = stringResource(R.string.home_refresh_network),
+                        )
                     }
                 }
             }
@@ -144,8 +154,7 @@ fun HomeScreen(
             if (state.proxyState.isActive && !ignoringBatteryOptimizations) {
                 item {
                     WarningPanel(
-                        message = "未关闭电池优化：息屏一段时间后代理可能被系统冻结，" +
-                            "指向本机的设备会全部断网。点此前往设置。",
+                        message = stringResource(R.string.home_warning_battery),
                         onClick = { KeepAlive.requestIgnoreBatteryOptimizations(context) },
                     )
                 }
@@ -155,8 +164,7 @@ fun HomeScreen(
             if (state.databaseWasReset) {
                 item {
                     WarningPanel(
-                        message = "本地数据曾因无法打开而被重建，节点、订阅与分流规则都已丢失。" +
-                            "点此前往设置从备份恢复。",
+                        message = stringResource(R.string.home_warning_database_reset),
                         onClick = {
                             viewModel.acknowledgeDatabaseReset()
                             onOpenSettings()
@@ -168,9 +176,7 @@ fun HomeScreen(
             if (state.credentialsPlaintext) {
                 item {
                     WarningPanel(
-                        message = "凭据加密不可用：系统密钥库失效，节点密码与入站账号" +
-                            "正以明文保存在本机。建议改用不重要的密码，" +
-                            "并在系统恢复正常后重新导入节点。",
+                        message = stringResource(R.string.home_warning_plaintext),
                         severe = true,
                     )
                 }
@@ -178,7 +184,7 @@ fun HomeScreen(
             if (state.hasExposedInboundWithoutAuth) {
                 item {
                     WarningPanel(
-                        message = "未启用认证：同一网络下的任何设备都能使用这个代理。点此设置账号密码。",
+                        message = stringResource(R.string.home_warning_no_auth),
                         // 装饰性警告变成一步可达的行动。刻意不顺手把监听地址改成
                         // 127.0.0.1 —— 开箱即用是这个产品的核心价值。
                         onClick = state.exposedInboundId?.let { id -> { onEditInbound(id) } },
@@ -186,7 +192,7 @@ fun HomeScreen(
                 }
             }
             if (state.otherVpnActive) {
-                item { WarningPanel("检测到其他 VPN 正在运行，出站流量会被它接管") }
+                item { WarningPanel(stringResource(R.string.home_warning_other_vpn)) }
             }
             // 配置生成器跳过了一些东西但内核照跑。以前这些警告生成了却没人渲染。
             state.configWarnings.forEach { warning ->
@@ -199,7 +205,15 @@ fun HomeScreen(
                     // 看门狗每 15 分钟醒来失败一次、弹一次通知。不给这个入口的话，
                     // 用户唯一的出路是「先想办法让它成功启动一次，再按停止」。
                     FailurePanel(
-                        message = failed.detail?.let { "${failed.message}：$it" } ?: failed.message,
+                        message = failed.detail
+                            ?.let {
+                                stringResource(
+                                    R.string.home_failure_detail,
+                                    failed.message,
+                                    it,
+                                )
+                            }
+                            ?: failed.message,
                         onGiveUp = viewModel::stopAndForget,
                     )
                 }
@@ -214,11 +228,12 @@ fun HomeScreen(
                 }
             }
 
-            item { SectionTitle("在其他设备上填写") }
+            item { SectionTitle(stringResource(R.string.home_addresses_title)) }
             item {
                 Text(
-                    text = "把下面任意一个地址填进电脑或游戏机的代理设置里。" +
-                        "手机自己的 App 不走代理 —— 本应用只代理指过来的其他设备。",
+                    // 「本机 App 不走代理」必须始终可见，而且要写成一句陈述
+                    // 而不是警告：它是这个产品的形态，不是故障。
+                    text = stringResource(R.string.home_addresses_hint),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(horizontal = 4.dp),
@@ -227,7 +242,7 @@ fun HomeScreen(
             if (state.addresses.isEmpty()) {
                 item {
                     Text(
-                        text = "未找到可用的网络接口，请连接 Wi-Fi 或开启热点",
+                        text = stringResource(R.string.home_addresses_empty),
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(horizontal = 4.dp),
@@ -240,7 +255,7 @@ fun HomeScreen(
                         port = state.primaryPort,
                         onCopy = { text ->
                             clipboard.setText(AnnotatedString(text))
-                            viewModel.showMessage("已复制 $text")
+                            viewModel.showMessage(context.getString(R.string.home_copied, text))
                         },
                     )
                 }
@@ -254,7 +269,9 @@ fun HomeScreen(
                         auth = auth,
                         onCopy = { label, text ->
                             clipboard.setText(AnnotatedString(text))
-                            viewModel.showMessage("已复制$label")
+                            viewModel.showMessage(
+                                context.getString(R.string.home_copied_field, label),
+                            )
                         },
                     )
                 }
@@ -262,9 +279,15 @@ fun HomeScreen(
 
             item {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    SectionTitle("入站服务", modifier = Modifier.weight(1f))
+                    SectionTitle(
+                        stringResource(R.string.home_inbounds_title),
+                        modifier = Modifier.weight(1f),
+                    )
                     IconButton(onClick = onAddInbound) {
-                        Icon(Icons.Default.Add, contentDescription = "添加入站")
+                        Icon(
+                            Icons.Default.Add,
+                            contentDescription = stringResource(R.string.home_inbound_add),
+                        )
                     }
                 }
             }
@@ -278,7 +301,7 @@ fun HomeScreen(
 
             item {
                 Text(
-                    text = "sing-box ${state.coreVersion}",
+                    text = stringResource(R.string.home_core_version, state.coreVersion),
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(start = 4.dp, top = 8.dp),
@@ -316,13 +339,15 @@ private fun PowerPanel(state: HomeUiState, onToggle: () -> Unit) {
         label = "statusColor",
     )
 
-    val label = when (proxyState) {
-        is ProxyState.Running -> "运行中"
-        ProxyState.Starting -> "正在启动…"
-        ProxyState.Stopping -> "正在停止…"
-        is ProxyState.Failed -> "启动失败"
-        ProxyState.Stopped -> "已停止"
-    }
+    val label = stringResource(
+        when (proxyState) {
+            is ProxyState.Running -> R.string.home_state_running
+            ProxyState.Starting -> R.string.home_state_starting
+            ProxyState.Stopping -> R.string.home_state_stopping
+            is ProxyState.Failed -> R.string.home_state_failed
+            ProxyState.Stopped -> R.string.home_state_stopped
+        },
+    )
 
     GlassPanel(hazeState = hazeState, modifier = Modifier.fillMaxWidth(), contentPadding = 24.dp) {
         Column(
@@ -355,7 +380,11 @@ private fun PowerPanel(state: HomeUiState, onToggle: () -> Unit) {
                 onClick = onToggle,
                 enabled = proxyState != ProxyState.Starting && proxyState != ProxyState.Stopping,
             ) {
-                Text(if (proxyState.isActive) "停止代理" else "启动代理")
+                Text(
+                    stringResource(
+                        if (proxyState.isActive) R.string.home_stop else R.string.home_start,
+                    ),
+                )
             }
 
             if (proxyState is ProxyState.Running) {
@@ -368,15 +397,81 @@ private fun PowerPanel(state: HomeUiState, onToggle: () -> Unit) {
                 ) {
                     SpeedStat(
                         icon = Icons.Outlined.NorthEast,
-                        label = "上传",
+                        label = stringResource(R.string.home_traffic_upload),
                         bytesPerSecond = state.traffic.uploadBytesPerSecond,
                     )
                     SpeedStat(
                         icon = Icons.Outlined.SouthWest,
-                        label = "下载",
+                        label = stringResource(R.string.home_traffic_download),
                         bytesPerSecond = state.traffic.downloadBytesPerSecond,
                     )
                 }
+                Spacer(Modifier.height(12.dp))
+                TrafficSparkline(samples = state.trafficSamples)
+            }
+        }
+    }
+}
+
+/**
+ * 最近一分钟的速率。
+ *
+ * 只给一分钟、不给坐标轴，是因为这条曲线要回答的问题就只有一个：
+ * 「刚才那下卡顿，是我这边断了还是对面慢了」。要看月度用量该去别的地方。
+ */
+@Composable
+private fun TrafficSparkline(samples: TrafficSamples) {
+    val uploadColor = StatusColors.connecting
+    val downloadColor = MaterialTheme.colorScheme.primary
+
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text = stringResource(R.string.home_traffic_chart_label),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.weight(1f),
+            )
+            if (samples.peak > 0) {
+                Text(
+                    text = formatSpeed(samples.peak),
+                    style = MaterialTheme.typography.labelSmall,
+                    fontFamily = FontFamily.Monospace,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+        Spacer(Modifier.height(6.dp))
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(48.dp),
+        ) {
+            if (samples.isPlottable) {
+                Sparkline(
+                    values = samples.download,
+                    peak = samples.peak,
+                    color = downloadColor,
+                    modifier = Modifier.fillMaxSize(),
+                )
+                Sparkline(
+                    values = samples.upload,
+                    peak = samples.peak,
+                    color = uploadColor,
+                    modifier = Modifier.fillMaxSize(),
+                )
+            } else {
+                // 空白区域和「速率一直是 0」长得一样，得说清楚现在是哪一种
+                SparklinePlaceholder(
+                    color = MaterialTheme.colorScheme.outlineVariant,
+                    modifier = Modifier.fillMaxSize(),
+                )
+                Text(
+                    text = stringResource(R.string.home_traffic_chart_waiting),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.align(Alignment.Center),
+                )
             }
         }
     }
@@ -434,12 +529,12 @@ private fun ConnectedDevicesPanel(devices: List<ConnectedDevice>, onClick: () ->
             )
             Spacer(Modifier.width(14.dp))
             Text(
-                text = "已连接设备",
+                text = stringResource(R.string.home_devices_title),
                 style = MaterialTheme.typography.titleSmall,
                 modifier = Modifier.weight(1f),
             )
             Text(
-                text = "${devices.size} 台",
+                text = stringResource(R.string.home_devices_count, devices.size),
                 style = MaterialTheme.typography.titleSmall,
                 fontWeight = FontWeight.SemiBold,
                 color = if (devices.isEmpty()) {
@@ -459,8 +554,9 @@ private fun ConnectedDevicesPanel(devices: List<ConnectedDevice>, onClick: () ->
 
         if (devices.isEmpty()) {
             Text(
-                text = "还没有设备连上来。手机自己的 App 不走代理，这是正常的 —— " +
-                    "请在另一台设备上填写下面的地址。",
+                // 「本机 App 不走代理」在这里再说一次是有意的：用户看到 0 台
+                // 设备时的第一反应是「坏了」，而正确答案往往是「还没去配另一台」
+                text = stringResource(R.string.home_devices_empty),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(top = 8.dp),
@@ -468,7 +564,11 @@ private fun ConnectedDevicesPanel(devices: List<ConnectedDevice>, onClick: () ->
         } else {
             devices.take(MAX_LISTED_DEVICES).forEach { device ->
                 Text(
-                    text = "${device.address} · ${device.connectionCount} 条连接",
+                    text = stringResource(
+                        R.string.home_devices_line,
+                        device.address,
+                        device.connectionCount,
+                    ),
                     style = MaterialTheme.typography.bodySmall,
                     fontFamily = FontFamily.Monospace,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -478,7 +578,10 @@ private fun ConnectedDevicesPanel(devices: List<ConnectedDevice>, onClick: () ->
             }
             if (devices.size > MAX_LISTED_DEVICES) {
                 Text(
-                    text = "还有 ${devices.size - MAX_LISTED_DEVICES} 台，点击查看全部",
+                    text = stringResource(
+                        R.string.home_devices_more,
+                        devices.size - MAX_LISTED_DEVICES,
+                    ),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(top = 6.dp),
@@ -502,25 +605,32 @@ private fun OutboundPanel(state: HomeUiState, onClick: () -> Unit) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    text = "出站",
+                    text = stringResource(R.string.home_outbound_label),
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 Text(
-                    text = state.outboundLabel,
+                    text = when (val outbound = state.outbound) {
+                        OutboundLabel.RelayOnly ->
+                            stringResource(R.string.home_outbound_relay_only)
+                        OutboundLabel.Auto -> stringResource(R.string.home_outbound_auto)
+                        OutboundLabel.Direct -> stringResource(R.string.home_outbound_direct)
+                        OutboundLabel.None -> stringResource(R.string.home_outbound_none)
+                        is OutboundLabel.Node -> outbound.name
+                    },
                     style = MaterialTheme.typography.titleSmall,
                     fontWeight = FontWeight.Medium,
                 )
                 if (state.isRelayOnly) {
                     Text(
-                        text = "点击添加节点后即可代理到上游",
+                        text = stringResource(R.string.home_outbound_add_hint),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
             }
             Text(
-                text = "${state.nodeCount} 个节点",
+                text = stringResource(R.string.home_outbound_nodes, state.nodeCount),
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -563,7 +673,11 @@ private fun AddressPanel(
                 )
             }
             IconButton(onClick = { onCopy(text) }) {
-                Icon(Icons.Default.ContentCopy, contentDescription = "复制")
+                Icon(
+                    Icons.Default.ContentCopy,
+                    // 同屏可能有好几个地址卡片，只念「复制」读屏用户分不清是哪一个
+                    contentDescription = stringResource(R.string.home_copy_field, text),
+                )
             }
         }
     }
@@ -586,15 +700,17 @@ private fun CredentialsPanel(
         modifier = Modifier.fillMaxWidth(),
         contentPadding = 14.dp,
     ) {
+        val usernameLabel = stringResource(R.string.home_credentials_username)
+        val passwordLabel = stringResource(R.string.home_credentials_password)
         Column {
             Text(
-                text = "代理需要认证，一并填进去",
+                text = stringResource(R.string.home_credentials_title),
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             Spacer(Modifier.height(6.dp))
-            CredentialRow("用户名", auth.username) { onCopy("用户名", auth.username) }
-            CredentialRow("密码", auth.password) { onCopy("密码", auth.password) }
+            CredentialRow(usernameLabel, auth.username) { onCopy(usernameLabel, auth.username) }
+            CredentialRow(passwordLabel, auth.password) { onCopy(passwordLabel, auth.password) }
         }
     }
 }
@@ -615,7 +731,10 @@ private fun CredentialRow(label: String, value: String, onCopy: () -> Unit) {
             modifier = Modifier.weight(1f),
         )
         IconButton(onClick = onCopy) {
-            Icon(Icons.Default.ContentCopy, contentDescription = "复制$label")
+            Icon(
+                Icons.Default.ContentCopy,
+                contentDescription = stringResource(R.string.home_copy_field, label),
+            )
         }
     }
 }
@@ -627,6 +746,7 @@ private fun InboundPanel(
     onToggle: (Boolean) -> Unit,
 ) {
     val hazeState = LocalHazeState.current
+    val toggleLabel = stringResource(R.string.home_inbound_toggle, inbound.type.displayName)
     GlassPanel(
         hazeState = hazeState,
         modifier = Modifier.fillMaxWidth(),
@@ -654,7 +774,15 @@ private fun InboundPanel(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
-            Switch(checked = inbound.enabled, onCheckedChange = onToggle)
+            Switch(
+                checked = inbound.enabled,
+                onCheckedChange = onToggle,
+                // 首页可能列着 SOCKS5、HTTP、PAC 三个入站，三个开关不带标签
+                // 时读屏软件只会念「开关，已开启」，念三遍
+                modifier = Modifier.semantics {
+                    contentDescription = toggleLabel
+                },
+            )
         }
     }
 }
@@ -688,7 +816,7 @@ private fun UptimePanel(startedAt: Long, interruptions: Int) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    text = "已连续运行",
+                    text = stringResource(R.string.home_uptime_label),
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -699,7 +827,7 @@ private fun UptimePanel(startedAt: Long, interruptions: Int) {
             }
             if (interruptions > 0) {
                 Text(
-                    text = "期间自动恢复 $interruptions 次",
+                    text = stringResource(R.string.home_uptime_interruptions, interruptions),
                     style = MaterialTheme.typography.labelMedium,
                     color = StatusColors.connecting,
                 )
@@ -709,17 +837,22 @@ private fun UptimePanel(startedAt: Long, interruptions: Int) {
 }
 
 /** 分钟精度就够了：这个数字是用来看「稳不稳」的，不是秒表。 */
+@Composable
 private fun formatDuration(millis: Long): String {
-    val totalMinutes = (millis / 60_000L).coerceAtLeast(0)
-    val days = totalMinutes / (24 * 60)
-    val hours = (totalMinutes % (24 * 60)) / 60
-    val minutes = totalMinutes % 60
+    val totalMinutes = (millis / MILLIS_PER_MINUTE).coerceAtLeast(0)
+    val days = totalMinutes / MINUTES_PER_DAY
+    val hours = (totalMinutes % MINUTES_PER_DAY) / MINUTES_PER_HOUR
+    val minutes = totalMinutes % MINUTES_PER_HOUR
     return when {
-        days > 0 -> "$days 天 $hours 小时"
-        hours > 0 -> "$hours 小时 $minutes 分"
-        else -> "$minutes 分"
+        days > 0 -> stringResource(R.string.home_duration_days, days, hours)
+        hours > 0 -> stringResource(R.string.home_duration_hours, hours, minutes)
+        else -> stringResource(R.string.home_duration_minutes, minutes)
     }
 }
+
+private const val MILLIS_PER_MINUTE = 60_000L
+private const val MINUTES_PER_HOUR = 60L
+private const val MINUTES_PER_DAY = 24 * MINUTES_PER_HOUR
 
 private const val UPTIME_TICK_MS = 30_000L
 
@@ -754,7 +887,7 @@ private fun FailurePanel(message: String, onGiveUp: () -> Unit) {
             }
             Spacer(Modifier.height(6.dp))
             TextButton(onClick = onGiveUp, modifier = Modifier.align(Alignment.End)) {
-                Text("停止并取消自动重试")
+                Text(stringResource(R.string.home_failure_give_up))
             }
         }
     }

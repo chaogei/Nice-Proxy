@@ -22,6 +22,8 @@ import com.niceproxy.core.service.core.NiceCore
 import com.niceproxy.core.service.network.LocalAddress
 import com.niceproxy.core.service.network.NetworkAddressDiscovery
 import com.niceproxy.core.service.network.NetworkBinder
+import com.niceproxy.traffic.TrafficHistory
+import com.niceproxy.traffic.TrafficSamples
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -72,6 +74,8 @@ data class HomeUiState(
     val credentialsPlaintext: Boolean = false,
     /** 数据库打不开被删库重建过，用户的节点、订阅、规则都没了。 */
     val databaseWasReset: Boolean = false,
+    /** 最近一分钟的速率曲线。只活在内存里，见 [TrafficHistory]。 */
+    val trafficSamples: TrafficSamples = TrafficSamples(),
 ) {
     /**
      * 监听在 0.0.0.0 却没开认证 —— 同网段任何人都能白嫖。
@@ -103,13 +107,30 @@ data class HomeUiState(
     /** 没有节点时应用退化为纯中继，首页要如实告知，而不是假装在代理。 */
     val isRelayOnly: Boolean get() = nodeCount == 0
 
-    val outboundLabel: String
+    /**
+     * 当前出站怎么称呼。
+     *
+     * 返回一个标记而不是拼好的字符串：其中三种是要跟着界面语言走的固定文案，
+     * 第四种是用户自己给节点起的名字 —— 那个**不能**翻译，也不该被塞进
+     * `strings.xml` 的模板里。分开表达之后，UI 层一眼就能看出哪个该本地化。
+     */
+    val outbound: OutboundLabel
         get() = when {
-            isRelayOnly -> "直连（未配置节点）"
-            selectedTag == WellKnownTag.AUTO -> "自动选择最快节点"
-            selectedTag == WellKnownTag.DIRECT -> "直连"
-            else -> selectedNode?.name ?: "未选择"
+            isRelayOnly -> OutboundLabel.RelayOnly
+            selectedTag == WellKnownTag.AUTO -> OutboundLabel.Auto
+            selectedTag == WellKnownTag.DIRECT -> OutboundLabel.Direct
+            else -> selectedNode?.name?.let(OutboundLabel::Node) ?: OutboundLabel.None
         }
+}
+
+sealed interface OutboundLabel {
+    data object RelayOnly : OutboundLabel
+    data object Auto : OutboundLabel
+    data object Direct : OutboundLabel
+    data object None : OutboundLabel
+
+    /** 节点名由用户输入，任何语言下都原样显示。 */
+    data class Node(val name: String) : OutboundLabel
 }
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -131,6 +152,25 @@ class HomeViewModel @Inject constructor(
     private val addresses = MutableStateFlow<List<LocalAddress>>(emptyList())
     private val otherVpnActive = MutableStateFlow(false)
     private val coreVersion = core.version
+
+    /** 只由 [trafficWithHistory] 这一条链写，因此不需要额外同步。 */
+    private val history = TrafficHistory()
+
+    /**
+     * 速率的当前值与最近一分钟的曲线。
+     *
+     * 和状态一起 combine 而不是单看 traffic：代理停掉之后服务不再推新帧，
+     * 曲线会僵在最后一秒的高度上，看起来像「停了还在跑流量」。
+     */
+    private val trafficWithHistory: Flow<TrafficWithHistory> =
+        combine(controller.state, controller.traffic) { state, snapshot ->
+            if (state is ProxyState.Running) {
+                history.record(snapshot.uploadBytesPerSecond, snapshot.downloadBytesPerSecond)
+            } else {
+                history.clear()
+            }
+            TrafficWithHistory(snapshot, history.snapshot())
+        }.flowOn(Dispatchers.Default)
 
     /**
      * 局域网里有几台设备正连着。
@@ -167,7 +207,7 @@ class HomeViewModel @Inject constructor(
 
     val uiState: StateFlow<HomeUiState> = combine(
         controller.state,
-        controller.traffic,
+        trafficWithHistory,
         inboundRepository.inbounds,
         // combine 的两层都已经是 5 路上限了，这里塞成 Triple 是为了不再多套一层
         combine(serverRepository.servers, settings.outboundSettings, journal.stats, ::Triple),
@@ -185,7 +225,8 @@ class HomeViewModel @Inject constructor(
     ) { state, traffic, inbounds, (servers, outbound, keepAlive), signals ->
         HomeUiState(
             proxyState = state,
-            traffic = traffic,
+            traffic = traffic.snapshot,
+            trafficSamples = traffic.samples,
             inbounds = inbounds,
             addresses = signals.addresses,
             nodeCount = servers.size,
@@ -249,6 +290,11 @@ class HomeViewModel @Inject constructor(
 
     /** 用户已经看到「库被重建过」的提示，不用再挂着了。 */
     fun acknowledgeDatabaseReset() = databaseHealth.acknowledge()
+
+    private data class TrafficWithHistory(
+        val snapshot: TrafficSnapshot,
+        val samples: TrafficSamples,
+    )
 
     /** combine 最多接五路，把这几个本机侧信号打包成一路。 */
     private data class LocalSignals(
