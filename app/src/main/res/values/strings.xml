@@ -1,8 +1,31 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+  简体中文是默认语言（`values/`），English 在 `values-en/`。
+
+  两件事必须一直守住：
+  1. 协议与产品专有名词不翻译 —— SOCKS5、HTTP、PAC、sing-box、Clash API、
+     Wi-Fi、DNS、VPN、Hysteria2 在两份文件里长得一模一样。用户是照着
+     v2rayNG、Every Proxy 之类的界面找过来的，把 "PAC" 译成「代理自动配置」
+     只会让他找不到自己要的那个开关。
+  2. 长句里的数字用位置参数（%1$s），不要靠拼接。英文语序和中文不同，
+     拼接出来的句子必然在某一种语言里读不通。
+-->
 <resources>
     <string name="app_name">Nice Proxy</string>
 
+    <!-- ============================ 通用 ============================ -->
+    <string name="common_back">返回</string>
+    <string name="common_cancel">取消</string>
+    <string name="common_confirm">确定</string>
+    <string name="common_delete">删除</string>
+    <string name="common_copy">复制</string>
+    <string name="common_share">分享</string>
+    <string name="common_close">关闭</string>
+    <string name="common_retry">重试</string>
+
+    <!-- ============================ 首页 ============================ -->
     <string name="home_title">Nice Proxy</string>
+    <string name="home_refresh_network">刷新网络信息</string>
     <string name="home_start">启动代理</string>
     <string name="home_stop">停止代理</string>
     <string name="home_state_stopped">已停止</string>
@@ -10,21 +33,247 @@
     <string name="home_state_running">运行中</string>
     <string name="home_state_stopping">正在停止…</string>
     <string name="home_state_failed">启动失败</string>
+    <string name="home_traffic_upload">上传</string>
+    <string name="home_traffic_download">下载</string>
+    <string name="home_traffic_chart_label">最近一分钟速率</string>
+    <string name="home_traffic_chart_waiting">正在采样，曲线会在几秒后出现</string>
+
+    <string name="home_devices_title">已连接设备</string>
+    <string name="home_devices_count">%1$d 台</string>
+    <string name="home_devices_empty">还没有设备连上来。手机自己的 App 不走代理，这是正常的 —— 请在另一台设备上填写下面的地址。</string>
+    <string name="home_devices_line">%1$s · %2$d 条连接</string>
+    <string name="home_devices_more">还有 %1$d 台，点击查看全部</string>
+
+    <string name="home_outbound_label">出站</string>
+    <string name="home_outbound_nodes">%1$d 个节点</string>
+    <string name="home_outbound_add_hint">点击添加节点后即可代理到上游</string>
+    <string name="home_outbound_relay_only">直连（未配置节点）</string>
+    <string name="home_outbound_auto">自动选择最快节点</string>
+    <string name="home_outbound_direct">直连</string>
+    <string name="home_outbound_none">未选择</string>
+
+    <string name="home_warning_battery">未关闭电池优化：息屏一段时间后代理可能被系统冻结，指向本机的设备会全部断网。点此前往设置。</string>
+    <string name="home_warning_database_reset">本地数据曾因无法打开而被重建，节点、订阅与分流规则都已丢失。点此前往设置从备份恢复。</string>
+    <string name="home_warning_plaintext">凭据加密不可用：系统密钥库失效，节点密码与入站账号正以明文保存在本机。建议改用不重要的密码，并在系统恢复正常后重新导入节点。</string>
+    <string name="home_warning_no_auth">未启用认证：同一网络下的任何设备都能使用这个代理。点此设置账号密码。</string>
+    <string name="home_warning_other_vpn">检测到其他 VPN 正在运行，出站流量会被它接管</string>
+    <string name="home_failure_give_up">停止并取消自动重试</string>
+    <string name="home_failure_detail">%1$s：%2$s</string>
+
+    <string name="home_uptime_label">已连续运行</string>
+    <string name="home_uptime_interruptions">期间自动恢复 %1$d 次</string>
+    <string name="home_duration_days">%1$d 天 %2$d 小时</string>
+    <string name="home_duration_hours">%1$d 小时 %2$d 分</string>
+    <string name="home_duration_minutes">%1$d 分</string>
 
     <string name="home_addresses_title">在其他设备上填写</string>
+    <string name="home_addresses_hint">把下面任意一个地址填进电脑或游戏机的代理设置里。手机自己的 App 不走代理 —— 本应用只代理指过来的其他设备。</string>
     <string name="home_addresses_empty">未找到可用的网络接口，请连接 Wi-Fi 或开启热点</string>
-    <string name="home_addresses_hint">把下面任意一个地址填进电脑或游戏机的代理设置里</string>
-    <string name="home_copy">复制</string>
-    <string name="home_copied">已复制到剪贴板</string>
+    <string name="home_copied">已复制 %1$s</string>
+    <string name="home_copied_field">已复制%1$s</string>
+    <string name="home_copy_field">复制%1$s</string>
+
+    <string name="home_credentials_title">代理需要认证，一并填进去</string>
+    <string name="home_credentials_username">用户名</string>
+    <string name="home_credentials_password">密码</string>
 
     <string name="home_inbounds_title">入站服务</string>
     <string name="home_inbound_add">添加入站</string>
-    <string name="home_no_auth_warning">未启用认证：同一网络下的任何设备都能使用这个代理</string>
-    <string name="home_vpn_active_warning">检测到其他 VPN 正在运行，出站流量会被它接管</string>
+    <string name="home_inbound_toggle">启用 %1$s 入站</string>
+    <string name="home_core_version">sing-box %1$s</string>
 
-    <string name="home_traffic_upload">上传</string>
-    <string name="home_traffic_download">下载</string>
+    <!-- ============================ 更多 ============================ -->
+    <string name="more_title">更多</string>
+    <string name="more_monitor_title">连接监控</string>
+    <string name="more_monitor_subtitle">查看哪台设备在访问什么</string>
+    <string name="more_logs_title">运行日志</string>
+    <string name="more_logs_subtitle">内核实时日志，排查问题时用</string>
+    <string name="more_settings_title">设置</string>
+    <string name="more_settings_subtitle">外观、语言、DNS、开机自启</string>
+    <string name="more_expert_title">专家模式</string>
+    <string name="more_expert_subtitle">预览即将下发给内核的 sing-box 配置</string>
 
+    <!-- ============================ 连接监控 ============================ -->
+    <string name="monitor_title">连接监控</string>
+    <string name="monitor_summary">%1$d 个活动连接 · 累计 ↑%2$s ↓%3$s</string>
+    <string name="monitor_not_running">代理未运行。</string>
+    <string name="monitor_empty">暂无活动连接。让局域网里的设备访问一下网络就会出现在这里。</string>
+    <string name="monitor_stream_error">监控数据已断开（%1$s），代理本身可能仍在正常工作。重开本页可重试。</string>
+    <string name="monitor_disconnect">断开</string>
+    <string name="monitor_disconnect_named">断开到 %1$s 的连接</string>
+    <string name="monitor_disconnect_all">断开全部</string>
+    <string name="monitor_disconnect_all_title">断开全部连接</string>
+    <string name="monitor_disconnect_all_message">将断开当前 %1$d 条连接。正在下载的设备会中断，多数客户端会立即重连。</string>
+    <string name="monitor_disconnected_count">已断开 %1$d 条连接</string>
+    <string name="monitor_memory_label">内核内存</string>
+    <string name="monitor_memory_value">%1$s</string>
+    <string name="monitor_memory_unavailable">读取中…</string>
+    <string name="monitor_memory_hint">sing-box 自报的常驻内存。连接数越多占用越高，停止代理后会归还给系统。</string>
+    <string name="monitor_speed_title">实时速率</string>
+    <string name="monitor_speed_peak">峰值 %1$s</string>
+    <string name="monitor_connection_route">%1$s → %2$s</string>
+    <string name="monitor_connection_route_with_rule">%1$s → %2$s · %3$s</string>
+    <string name="monitor_connection_traffic">↑%1$s ↓%2$s</string>
+
+    <!-- ============================ 日志 ============================ -->
+    <string name="logs_title">运行日志</string>
+    <string name="logs_copy_all">复制全部日志</string>
+    <string name="logs_clear">清空</string>
+    <string name="logs_not_running">代理未运行，日志将在启动后开始输出。</string>
+    <string name="logs_stream_error">日志流已断开（%1$s）。代理本身可能仍在正常工作，返回后重进本页可重试。</string>
+    <string name="logs_empty_copy">日志为空，没有可复制的内容</string>
+    <string name="logs_copied">已复制 %1$d 行日志到剪贴板</string>
+    <string name="logs_clipboard_label">Nice Proxy 运行日志</string>
+
+    <!-- ============================ 分流 ============================ -->
+    <string name="routing_title">分流</string>
+    <string name="routing_add_rule">添加规则</string>
+    <string name="routing_rules_section">规则（自上而下匹配，命中即停）</string>
+    <string name="routing_rulesets_section">规则集</string>
+    <string name="routing_empty_global">全局代理模式无需规则，所有流量都走上游节点。</string>
+    <string name="routing_empty">还没有规则。选一个预设模式，或手动添加。</string>
+    <string name="routing_move_up">上移</string>
+    <string name="routing_move_down">下移</string>
+    <string name="routing_move_top">移到最前</string>
+    <string name="routing_move_bottom">移到最后</string>
+    <string name="routing_rule_enabled">启用规则「%1$s」</string>
+    <string name="routing_rule_menu">「%1$s」的更多操作</string>
+    <string name="routing_locked_badge">套用模板时保留</string>
+    <string name="routing_lock">套用模板时保留这条规则</string>
+    <string name="routing_unlock">取消保留</string>
+    <string name="routing_unlock_title">取消保留「%1$s」</string>
+    <string name="routing_unlock_message">取消后，下次套用预设模式时这条规则会被一并删除。</string>
+    <string name="routing_apply_title">套用「%1$s」</string>
+    <string name="routing_apply_message">预设模式会整体替换规则列表：当前 %1$d 条未锁定的规则将被删除，已锁定的会保留。此操作不可撤销。\n\n想留下某条手写规则，可以先取消，打开那条规则的「套用模板时保留」再回来。</string>
+    <string name="routing_apply_confirm">套用</string>
+    <string name="routing_delete_title">删除规则</string>
+    <string name="routing_delete_message">「%1$s」将被删除，此操作不可撤销。命中它的流量会改由后面的规则或默认出站处理。</string>
+    <string name="routing_rule_summary">%1$s → %2$s</string>
+    <string name="routing_match_all">全部流量</string>
+    <string name="routing_match_ruleset">规则集 %1$s</string>
+    <string name="routing_match_domain_suffix">域名后缀 %1$s</string>
+    <string name="routing_match_domain">域名 %1$s</string>
+    <string name="routing_match_keyword">关键词 %1$s</string>
+    <string name="routing_match_ip">IP %1$s</string>
+    <string name="routing_match_source">来源 %1$s</string>
+    <string name="routing_match_port">端口 %1$s</string>
+    <string name="routing_match_private">局域网地址</string>
+    <string name="routing_match_protocol">协议 %1$s</string>
+    <string name="routing_match_separator">，</string>
+    <string name="routing_action_direct">直连</string>
+    <string name="routing_action_proxy">代理</string>
+    <string name="routing_action_reject">拒绝</string>
+    <string name="routing_action_hijack_dns">接管 DNS</string>
+    <string name="routing_action_sniff">嗅探</string>
+    <string name="routing_action_resolve">解析域名</string>
+
+    <!-- ============================ 设置 ============================ -->
+    <string name="settings_title">设置</string>
+
+    <string name="settings_group_appearance">外观与语言</string>
+    <string name="settings_theme">主题</string>
+    <string name="settings_theme_system">跟随系统</string>
+    <string name="settings_theme_light">浅色</string>
+    <string name="settings_theme_dark">深色</string>
+    <string name="settings_language">语言</string>
+    <string name="settings_language_system">跟随系统</string>
+    <string name="settings_language_chinese">简体中文</string>
+    <string name="settings_language_english">English</string>
+    <string name="settings_language_hint">协议名称（SOCKS5、HTTP、PAC 等）在任何语言下都保持原样。</string>
+
+    <string name="settings_group_service">服务</string>
+    <string name="settings_auto_start">开机自启</string>
+    <string name="settings_auto_start_desc">设备重启后自动开启代理</string>
+    <string name="settings_start_on_launch">打开应用时自启</string>
+    <string name="settings_start_on_launch_desc">启动应用后自动开启代理</string>
+    <string name="settings_power_save">省电模式</string>
+    <string name="settings_power_save_desc">绑定的 IP 从设备上消失时自动停止</string>
+    <string name="settings_keep_wifi">保持 Wi-Fi 唤醒</string>
+    <string name="settings_keep_wifi_desc">防止 Wi-Fi 进入省电模式导致断流。Android 14 及以上仅在亮屏时有效，息屏保活请依靠下方的电池优化设置</string>
+
+    <string name="settings_group_keepalive">后台保活</string>
+    <string name="settings_auto_restart">内核异常时自动重启</string>
+    <string name="settings_auto_restart_desc">内核意外退出或启动失败时按退避策略重试，而不是悄无声息地停在那里</string>
+    <string name="settings_pac_fallback">PAC：代理不可用时允许直连</string>
+    <string name="settings_pac_fallback_desc">关闭时代理一挂客户端就断网，这是有意的 —— 游戏机和电视盒子不会提示「没在走代理」，静默裸奔比断网危险得多。只有在断网影响更大时才打开。</string>
+    <string name="settings_battery">忽略电池优化</string>
+    <string name="settings_battery_granted">已关闭，系统不会在息屏后冻结代理</string>
+    <string name="settings_battery_denied">未关闭：息屏一段时间后代理可能被系统冻结，所有客户端一起断网</string>
+    <string name="settings_vendor">厂商后台限制</string>
+    <string name="settings_vendor_desc">厂商在系统电池优化之外另有一套管控，不把本应用加进白名单，前台服务照样会被手机管家清掉</string>
+    <string name="settings_keepalive_window">最近 7 天</string>
+    <string name="settings_keepalive_none">还没有记录到中断。代理每次被系统或内核打断都会记在这里。</string>
+    <string name="settings_keepalive_clean">最近 7 天没有被中断过。</string>
+    <string name="settings_keepalive_count">被中断 %1$d 次，均已自动恢复。频繁中断说明系统在杀后台，请确认上面两项白名单都已开启。</string>
+    <string name="settings_keepalive_latest">最近一次：%1$s · %2$s</string>
+    <string name="settings_keepalive_clear">清空记录</string>
+    <string name="settings_keepalive_cleared">已清空保活记录</string>
+
+    <string name="settings_group_network">网络</string>
+    <string name="settings_outbound_interface">出站网卡</string>
+    <string name="settings_outbound_interface_desc">决定代理流量从哪张网卡发出。选定后即使系统默认网络变化也不跟随。</string>
+    <string name="settings_ipv6">启用 IPv6</string>
+    <string name="settings_ipv6_desc">关闭后 DNS 只解析 IPv4</string>
+
+    <string name="settings_group_dns">DNS</string>
+    <string name="settings_dns_remote">代理流量 DNS</string>
+    <string name="settings_dns_local">直连流量 DNS</string>
+    <string name="settings_dns_hint">支持 udp://、tls://、https://、quic:// 等写法，直接填 IP 等同于 udp。</string>
+
+    <string name="settings_group_storage">存储</string>
+    <string name="settings_storage_desc">内核会在应用私有目录里缓存规则集（.srs）与节点选择结果。这些文件由 sing-box 自己管理，应用内没有安全的单独清理入口 —— 运行期间删掉它们会让内核当场找不到规则集。</string>
+    <string name="settings_storage_open">系统应用存储设置</string>
+    <string name="settings_storage_open_desc">在系统页面里查看占用并清除缓存。清除后下次启动会重新下载规则集。</string>
+    <string name="settings_storage_unavailable">这台设备上找不到应用存储设置页</string>
+
+    <string name="settings_group_backup">备份与恢复</string>
+    <string name="settings_backup_desc">备份含节点密码与入站凭据，因此强制加密。密码只用于这个文件，丢失后无法找回。</string>
+    <string name="settings_backup_export">导出备份</string>
+    <string name="settings_backup_restore">恢复备份</string>
+    <string name="settings_backup_password_export">设置备份密码</string>
+    <string name="settings_backup_password_restore">输入备份密码</string>
+    <string name="settings_backup_password">密码</string>
+    <string name="settings_backup_password_confirm">确认密码</string>
+    <string name="settings_backup_password_min">至少 %1$d 位</string>
+    <string name="settings_backup_password_mismatch">两次输入不一致</string>
+    <string name="settings_backup_password_note">密码只用于这个备份文件，应用不会保存它。忘记密码将无法恢复。</string>
+    <string name="settings_backup_restore_note">恢复会覆盖当前的节点、入站与规则，此操作不可撤销。</string>
+    <string name="settings_backup_pick_target">选择保存位置</string>
+    <string name="settings_backup_pick_file">选择备份文件</string>
+    <string name="settings_backup_exported">备份已导出（已加密）</string>
+    <string name="settings_backup_write_failed">写入失败：%1$s</string>
+    <string name="settings_backup_read_failed">读取失败：%1$s</string>
+    <string name="settings_backup_failed">备份失败：%1$s</string>
+    <string name="settings_backup_no_target">无法写入所选位置</string>
+    <string name="settings_backup_no_source">无法读取所选文件</string>
+    <string name="settings_backup_restore_failed">恢复失败</string>
+    <string name="settings_backup_restored">已恢复 %1$d 个节点、%2$d 个入站、%3$d 条规则</string>
+
+    <string name="settings_group_about">关于</string>
+    <string name="settings_about_core">内核 sing-box %1$s</string>
+    <string name="settings_about_license">Nice Proxy 以 GPL-3.0 开源。本应用不使用 VPN 权限，因此不会代理本机应用的流量。</string>
+
+    <!-- ============================ 专家模式 ============================ -->
+    <string name="expert_title">专家模式</string>
+    <string name="expert_subtitle">即将下发给内核的 sing-box 配置</string>
+    <string name="expert_readonly_notice">这里只读。配置由节点、入站与分流规则生成。应用不接受手工注入的 JSON：那条路能把内核配到起不来，而界面上看不出任何异常。要改内容，请回到对应的页面改配置本身。</string>
+    <string name="expert_secret_warning">这份 JSON 含节点密码、入站账号与 Clash API 密钥。分享前请自行打码。</string>
+    <string name="expert_refresh">重新生成</string>
+    <string name="expert_copy">复制配置</string>
+    <string name="expert_copied">已复制 %1$d 个字符</string>
+    <string name="expert_share">分享配置</string>
+    <string name="expert_share_title">分享 sing-box 配置</string>
+    <string name="expert_share_confirm_title">分享含密码的配置</string>
+    <string name="expert_share_confirm_message">这份 JSON 里有明文的节点密码、入站账号和 Clash API 密钥。发给别人等于把你的代理交出去。确认继续？</string>
+    <string name="expert_share_no_target">这台设备上没有可以接收文本的应用</string>
+    <string name="expert_fingerprint">指纹 %1$s</string>
+    <string name="expert_size">%1$d 个字符</string>
+    <string name="expert_generating">正在生成…</string>
+    <string name="expert_failed_title">配置生成失败，代理无法启动</string>
+    <string name="expert_warnings_title">生成器跳过了这些内容，内核照常启动</string>
+    <string name="expert_clipboard_label">sing-box 配置</string>
+
+    <!-- ============================ 入站编辑 ============================ -->
     <string name="inbound_edit_title">编辑入站</string>
     <string name="inbound_new_title">新建入站</string>
     <string name="inbound_type">类型</string>
@@ -43,9 +292,6 @@
     <string name="inbound_delete">删除</string>
 
     <string name="permission_notification_rationale">需要通知权限才能显示常驻状态并保持服务在后台运行</string>
-
-    <string name="common_back">返回</string>
-    <string name="common_cancel">取消</string>
 
     <string name="shortcut_start">启动代理</string>
     <string name="shortcut_stop">停止代理</string>

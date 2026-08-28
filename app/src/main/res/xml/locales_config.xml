@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  API 33+ 的 per-app language（FR-7.2）。声明了它，系统「设置 → 应用 → 语言」里
+  才会出现本应用的语言项，用户从那条路径改语言也能生效。
+
+  只列出真正有翻译的两种：多列一种，系统会大方地把它显示出来，
+  而用户选完得到的仍是回落后的中文。
+-->
+<locale-config xmlns:android="http://schemas.android.com/apk/res/android">
+    <locale android:name="zh-CN" />
+    <locale android:name="en" />
+</locale-config>
