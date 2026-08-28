@@ -25,6 +25,10 @@ dependencies {
     implementation(projects.core.common)
 
     implementation(libs.kotlinx.coroutines.core)
+    // 备份文件的顶层结构在这一层拼装：流量表是 core:data 的私有结构，
+    // 不进 core:config 的 BackupPayload，而是作为一个并列的顶层键挂在旁边。
+    // 见 BackupRepository.buildPayload。
+    implementation(libs.kotlinx.serialization.json)
 
     implementation(libs.hilt.android)
     ksp(libs.hilt.compiler)

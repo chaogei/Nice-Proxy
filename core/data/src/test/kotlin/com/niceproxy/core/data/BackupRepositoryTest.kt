@@ -6,6 +6,7 @@ import com.niceproxy.core.config.backup.BackupError
 import com.niceproxy.core.config.backup.BackupException
 import com.niceproxy.core.config.backup.BackupPayload
 import com.niceproxy.core.database.crypto.SecretText
+import com.niceproxy.core.database.entity.TrafficDailyEntity
 import com.niceproxy.core.database.entity.toEntity
 import com.niceproxy.core.model.GroupType
 import kotlinx.coroutines.Dispatchers
@@ -28,11 +29,18 @@ internal class BackupRepositoryTest {
     private val serverDao = FakeServerDao(groupDao)
     private val inboundDao = FakeInboundDao()
     private val routingDao = FakeRoutingDao()
+    private val trafficDao = FakeTrafficDao()
     private val transactions = FakeTransactionRunner(
-        listOf(groupDao, serverDao, inboundDao, routingDao),
+        listOf(groupDao, serverDao, inboundDao, routingDao, trafficDao),
     )
     private val repository = BackupRepository(
-        inboundDao, serverDao, groupDao, routingDao, transactions, Dispatchers.Unconfined,
+        inboundDao,
+        serverDao,
+        groupDao,
+        routingDao,
+        trafficDao,
+        transactions,
+        Dispatchers.Unconfined,
     )
 
     private companion object {
@@ -61,7 +69,7 @@ internal class BackupRepositoryTest {
         /** PBKDF2 是 21 万次迭代，能复用就别重复算。 */
         val SAMPLE_BLOB: ByteArray by lazy { encode(SAMPLE) }
 
-        /** 节点指向一个不在备份里的分组，`upsertAll` 会撞上外键约束。 */
+        /** 节点指向一个不在备份里的分组 —— 放行的话会撞上外键约束。 */
         val ORPHAN_BLOB: ByteArray by lazy {
             encode(
                 SAMPLE.copy(
@@ -69,6 +77,19 @@ internal class BackupRepositoryTest {
                     servers = listOf(
                         node("s1", groupId = "g1"),
                         node("s2", groupId = "已经不存在的分组"),
+                    ),
+                ),
+            )
+        }
+
+        /** 同一个 id 在备份里出现两次。 */
+        val DUPLICATE_BLOB: ByteArray by lazy {
+            encode(
+                SAMPLE.copy(
+                    groups = listOf(group("g1")),
+                    servers = listOf(
+                        node("s1", groupId = "g1", name = "先来的"),
+                        node("s1", groupId = "g1", name = "后来的"),
                     ),
                 ),
             )
@@ -173,8 +194,12 @@ internal class BackupRepositoryTest {
             inboundDao.upsert(inbound("keep-inbound", port = 9999).toEntity())
             routingDao.upsertRule(rule("keep-rule").toEntity())
             routingDao.upsertRuleSet(ruleSet("geoip-keep").toEntity())
+            trafficDao.upsertAll(listOf(trafficRow(20260101, "keep-tag")))
+            // 备份本身是好的，是写到一半磁盘满了 —— 规整不掉的那类失败，
+            // 也是这个事务唯一还需要兜住的那类
+            serverDao.failOnUpsert = { error("磁盘写满") }
 
-            val result = repository.restore(ORPHAN_BLOB, PASSWORD)
+            val result = repository.restore(SAMPLE_BLOB, PASSWORD)
 
             assertThat(result.isFailure).isTrue()
             assertThat(groupDao.getAll().map { it.id }).containsExactly("keep")
@@ -182,12 +207,15 @@ internal class BackupRepositoryTest {
             assertThat(inboundDao.getAll().map { it.id }).containsExactly("keep-inbound")
             assertThat(routingDao.getRules().map { it.id }).containsExactly("keep-rule")
             assertThat(routingDao.getRuleSets().map { it.tag }).containsExactly("geoip-keep")
+            assertThat(trafficDao.count()).isEqualTo(1)
         }
 
         @Test
         @DisplayName("失败被包成 Result 返回，不会炸到调用方")
         fun failureIsReported() = runTest {
-            assertThat(repository.restore(ORPHAN_BLOB, PASSWORD).isFailure).isTrue()
+            serverDao.failOnUpsert = { error("磁盘写满") }
+
+            assertThat(repository.restore(SAMPLE_BLOB, PASSWORD).isFailure).isTrue()
         }
 
         @Test
@@ -198,6 +226,114 @@ internal class BackupRepositoryTest {
             repository.restore(SAMPLE_BLOB, PASSWORD).getOrThrow()
 
             assertThat(transactions.transactionCount).isEqualTo(1)
+        }
+    }
+
+    /**
+     * 恢复的冲突策略。
+     *
+     * 一份被手工改过、或者跨版本导出的备份不该让用户「什么都恢复不了」——
+     * 清空是不可逆的，所以任何「这份备份有问题」的判断都必须发生在第一条
+     * DELETE 之前，而不是靠事务回滚兜底。靠回滚兜住的每一次失败，
+     * 对用户来说都是一次「恢复失败」。
+     */
+    @Nested
+    @DisplayName("冲突策略")
+    inner class Conflicts {
+
+        @Test
+        @DisplayName("孤儿节点被丢掉，其余照常恢复")
+        fun orphanedServersAreDropped() = runTest {
+            // 放行的话第一条就撞上 servers.group_id 的外键约束，
+            // 而恢复是一个事务 —— 一个改坏的分组能连累整份备份
+            val summary = repository.restore(ORPHAN_BLOB, PASSWORD).getOrThrow()
+
+            assertThat(serverDao.getAll().map { it.id }).containsExactly("s1")
+            assertThat(summary.conflicts.orphanedServers).containsExactly("s2")
+        }
+
+        @Test
+        @DisplayName("备份内部 id 重复时保留第一条")
+        fun duplicateIdsKeepTheFirst() = runTest {
+            // 都写进去的话，@Upsert 的行为是后写的盖掉先写的，
+            // 于是「保留哪一条」取决于迭代顺序 —— 那不是策略，是抽签
+            val summary = repository.restore(DUPLICATE_BLOB, PASSWORD).getOrThrow()
+
+            assertThat(serverDao.getAll().map { it.name }).containsExactly("先来的")
+            assertThat(summary.conflicts.duplicateIds).containsExactly("s1")
+        }
+
+        @Test
+        @DisplayName("被丢掉的条目计入 summary，UI 能如实告诉用户")
+        fun conflictsAreReported() = runTest {
+            val summary = repository.restore(ORPHAN_BLOB, PASSWORD).getOrThrow()
+
+            assertThat(summary.conflicts.isEmpty).isFalse()
+            assertThat(summary.conflicts.total).isEqualTo(1)
+        }
+
+        @Test
+        @DisplayName("一份健康的备份不报任何冲突")
+        fun healthyBackupHasNoConflicts() = runTest {
+            val summary = repository.restore(SAMPLE_BLOB, PASSWORD).getOrThrow()
+
+            assertThat(summary.conflicts.isEmpty).isTrue()
+        }
+    }
+
+    /**
+     * 流量统计进备份。
+     *
+     * 它是这份文件里唯一**可丢弃**的部分：丢了只是图表断一截，而节点凭据
+     * 丢了就再也回不来。这个差别决定了它的所有处置方式。
+     */
+    @Nested
+    @DisplayName("流量统计")
+    inner class Traffic {
+
+        @Test
+        @DisplayName("导出再恢复能还原流量账")
+        fun roundTrips() = runTest {
+            groupDao.upsert(group("g1").toEntity())
+            trafficDao.upsertAll(
+                listOf(
+                    trafficRow(20260827, "proxy", upload = 100, download = 200),
+                    trafficRow(20260828, "direct", upload = 5, download = 6),
+                ),
+            )
+
+            val blob = repository.export(PASSWORD).getOrThrow()
+            trafficDao.deleteAll()
+            val summary = repository.restore(blob, PASSWORD).getOrThrow()
+
+            assertThat(summary.trafficRows).isEqualTo(2)
+            assertThat(trafficDao.getRange(0, 99991231).map { it.outboundTag to it.upload })
+                .containsExactly("proxy" to 100L, "direct" to 5L)
+        }
+
+        @Test
+        @DisplayName("旧版本导出的备份里没有这个键，照样能恢复")
+        fun oldBackupsRestoreFine() = runTest {
+            // SAMPLE_BLOB 是直接序列化 BackupPayload 得到的，
+            // 也就是这次改动之前的文件格式
+            val summary = repository.restore(SAMPLE_BLOB, PASSWORD).getOrThrow()
+
+            assertThat(summary.trafficRows).isEqualTo(0)
+            assertThat(summary.servers).isEqualTo(3)
+        }
+
+        @Test
+        @DisplayName("恢复会先清空本机的流量账，不和备份里的混在一起")
+        fun restoreReplacesLocalTraffic() = runTest {
+            groupDao.upsert(group("g1").toEntity())
+            trafficDao.upsertAll(listOf(trafficRow(20250101, "本机的旧账")))
+            val blob = repository.export(PASSWORD).getOrThrow()
+            trafficDao.upsertAll(listOf(trafficRow(20260828, "导出之后又记的")))
+
+            repository.restore(blob, PASSWORD).getOrThrow()
+
+            assertThat(trafficDao.getRange(0, 99991231).map { it.outboundTag })
+                .containsExactly("本机的旧账")
         }
     }
 
@@ -294,10 +430,50 @@ internal class BackupRepositoryTest {
 
             val skips = repository.inspectExport()
 
-            assertThat(skips.groups).isEqualTo(1)
-            assertThat(skips.servers).isEqualTo(1)
-            assertThat(skips.inbounds).isEqualTo(1)
+            assertThat(skips.groups).hasSize(1)
+            assertThat(skips.servers).hasSize(1)
+            assertThat(skips.inbounds).hasSize(1)
             assertThat(skips.isEmpty).isFalse()
+        }
+
+        @Test
+        @DisplayName("跳过的条目带名字和原因，用户才知道该去重导哪一个")
+        fun skipsAreAuditable() = runTest {
+            // 一句「跳过了 3 个节点」是没法处置的：用户既不知道跳的是哪几个，
+            // 也就无从判断要不要现在就去重新导入
+            groupDao.upsert(group("g1").toEntity())
+            serverDao.upsert(
+                node("broken", name = "香港 01").toEntity()
+                    .copy(paramsJson = SecretText.Unreadable("nsec1:dead")),
+            )
+            serverDao.upsert(node("stale", name = "日本 02").toEntity().copy(tlsJson = "{ 不是 JSON"))
+
+            val skips = repository.inspectExport()
+
+            assertThat(skips.servers.map { it.name })
+                .containsExactly("香港 01", "日本 02")
+            assertThat(skips.servers.single { it.id == "broken" }.reason)
+                .isEqualTo(BackupRepository.SkipReason.UNREADABLE_SECRET)
+            // 密文是好的，是里面的 JSON 读不懂了 —— 成因和处置都不一样
+            assertThat(skips.servers.single { it.id == "stale" }.reason)
+                .isEqualTo(BackupRepository.SkipReason.UNDECODABLE_JSON)
+        }
+
+        @Test
+        @DisplayName("因为分组被跳过而连坐的节点，原因要如实标出来")
+        fun collateralSkipsSayWhy() = runTest {
+            // 这个节点自己没毛病，让用户去「重新导入」它是误导 ——
+            // 他真正要做的是把订阅链接重新粘一遍
+            groupDao.upsert(
+                subscription("lost", "https://b.example.com/sub").toEntity()
+                    .copy(url = SecretText.Unreadable("nsec1:dead")),
+            )
+            serverDao.upsert(node("healthy", groupId = "lost").toEntity())
+
+            val skips = repository.inspectExport()
+
+            assertThat(skips.servers.single().reason)
+                .isEqualTo(BackupRepository.SkipReason.GROUP_SKIPPED)
         }
 
         @Test
@@ -313,4 +489,17 @@ internal class BackupRepositoryTest {
 
     private fun subscription(id: String, url: String) =
         group(id, type = GroupType.SUBSCRIPTION, url = url)
+
+    private fun trafficRow(
+        day: Int,
+        tag: String,
+        upload: Long = 1,
+        download: Long = 1,
+    ) = TrafficDailyEntity(
+        day = day,
+        outboundTag = tag,
+        upload = upload,
+        download = download,
+        updatedAt = 0,
+    )
 }
