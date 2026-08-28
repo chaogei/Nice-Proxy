@@ -27,6 +27,7 @@ import com.niceproxy.core.service.config.ConfigDigest
 import com.niceproxy.core.service.core.NiceCore
 import com.niceproxy.core.service.network.NetworkAddressDiscovery
 import com.niceproxy.core.service.network.NetworkBinder
+import com.niceproxy.core.service.network.OutboundBinding
 import com.niceproxy.core.service.pac.PacScript
 import com.niceproxy.core.service.pac.PacServer
 import com.niceproxy.core.service.work.ProxyWatchdogScheduler
@@ -44,6 +45,7 @@ import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import javax.inject.Inject
 
 /**
@@ -94,6 +96,7 @@ class ProxyService : LifecycleService() {
     private var applyJob: Job? = null
     private var healthJob: Job? = null
     private var retryJob: Job? = null
+    private var bindingJob: Job? = null
 
     /** 内核当前跑的是哪一份配置。为 null 表示内核没在跑。 */
     private var runningConfig: AppliedConfig? = null
@@ -110,12 +113,29 @@ class ProxyService : LifecycleService() {
     private var autoRestartOnFailure = true
 
     /**
-     * 通知正文的临时覆盖，目前只用于退避重试的说明。
+     * 宿主侧那几项「改了要就地生效、但不用重启内核」的设置的指纹。
+     *
+     * 见 [ConfigDigest.hostKey]。它和 [AppliedConfig.restartKey] 是两条独立的比对：
+     * 那一位变了要重启内核，这一位变了只要重做对应的那一步。
+     */
+    private var hostKey: String? = null
+
+    /**
+     * 退避重试的倒计时文案。
      *
      * 需要是字段而不是参数：重试等待期间网络变化仍会触发通知刷新，
      * 不记住它的话那一下就把「30 秒后重试」冲掉了。
      */
-    private var statusOverride: String? = null
+    private var retryStatus: String? = null
+
+    /**
+     * 出站没能绑到用户指定的网卡时的降级说明。
+     *
+     * 与 [retryStatus] 分开两个字段而不是共用一个「覆盖文案」：这两件事会同时成立
+     * （绑不上导致启动失败、于是进入退避重试），共用一个字段时后写的会把先写的抹掉，
+     * 而抹掉哪一个都会让通知说不清现在到底在等什么。
+     */
+    private var degradedStatus: String? = null
 
     /** 内核最近一次成功启动的时刻，用来识别「起来了又立刻死」的反复横跳。 */
     private var lastCoreStartAt = 0L
@@ -136,6 +156,15 @@ class ProxyService : LifecycleService() {
      * 变成 1.04 KB/s 时渲染出来的文本完全一样，那次 IPC 就是纯浪费。
      */
     private var lastNotified: ProxyNotifications.Content? = null
+
+    /**
+     * 上一次真正下发通知的时刻，用于限速。
+     *
+     * 光靠内容判重不够：速率在 KB/s 量级上每一帧都不一样，判重挡不住任何东西，
+     * 而 Clash API 的流量流在高负载下每秒能来好几帧。每一帧一次主线程 Binder 调用，
+     * 恰好落在设备最忙的时候。见 [MIN_NOTIFY_INTERVAL_MS]。
+     */
+    private var lastNotifiedAt = 0L
 
     /**
      * 两个 PendingIntent 在 [onCreate] 建一次就够了。
@@ -166,6 +195,14 @@ class ProxyService : LifecycleService() {
             when (intent.action) {
                 ACTION_START -> startProxy(readStartReason(intent))
                 ACTION_STOP -> stopProxy()
+                // 「不再尝试」。它和 ACTION_STOP 走同一条路，区别只在于服务此刻多半
+                // 根本没在跑 —— 它来自失败通知上的那个按钮，而那时候界面上只有
+                // 「启动」没有「停止」，用户没有别的地方能让看门狗安静下来。
+                ACTION_GIVE_UP -> {
+                    notifications.cancelRecoveryBlocked()
+                    notifications.cancelFailure()
+                    stopProxy(forgetRunIntent = true)
+                }
                 ACTION_RELOAD -> reapplyConfig()
                 else -> if (!controller.state.value.isActive) stopSelf()
             }
@@ -188,9 +225,16 @@ class ProxyService : LifecycleService() {
 
     private fun startProxy(reason: StartReason) {
         if (controller.state.value.isActive) return
+        // 正在关的过程中收到启动请求就只能放弃这一次。teardown 已经在收内核了，
+        // 这时候插进去只会变成「一个在关、一个在开」的端口互撞。
+        if (controller.state.value is ProxyState.Stopping) {
+            Log.i(TAG, "正在停止，忽略这次启动请求")
+            return
+        }
         pendingStartReason = reason
         controller.updateState(ProxyState.Starting)
         controller.updateTraffic(TrafficSnapshot())
+        notifications.cancelFailure()
         if (!promoteToForeground()) {
             // 这是 Android 12+ 的后台启动限制，重试也一样会被拦；
             // 出路是让用户关掉电池优化（那是官方豁免项之一），或者回到应用内手动开。
@@ -213,25 +257,39 @@ class ProxyService : LifecycleService() {
     }
 
     private suspend fun launchCore() {
-        autoRestartOnFailure = settings.serviceSettings.first().autoRestartOnFailure
-
         val workDir = filesDir.absolutePath
-        val prepared = when (val result = configRepository.build(workDir)) {
-            is ConfigResult.Failure -> {
-                // 配置本身不合法是确定性错误，重试一万次也是同样的结果，
-                // 只会让用户盯着一个永远在「即将重试」的通知。
-                fail(
+
+        // 生成配置之前的这一段没有任何自带超时：读 DataStore、读数据库、拼 JSON，
+        // 任何一步卡住都会让状态永远停在 Starting，而用户看到的是一个转了十分钟的
+        // 「正在启动…」，连「失败」都等不到。内核启动那一步有自己的两层截止时间
+        // （见 NiceCore.start），所以刻意只把这一段圈进来。
+        val prepared = withTimeoutOrNull(PREFLIGHT_TIMEOUT_MS) {
+            autoRestartOnFailure = settings.serviceSettings.first().autoRestartOnFailure
+            when (val result = configRepository.build(workDir)) {
+                is ConfigResult.Failure -> PreflightResult.Invalid(
                     result.errors.joinToString("；") { it.message },
-                    cause = FailureCause.InvalidConfig,
                 )
-                return
+                is ConfigResult.Success -> PreflightResult.Ready(prepare(result))
             }
-            is ConfigResult.Success -> prepare(result)
         }
 
-        networkBinder.apply(prepared.networkPreference)
+        val config = when (prepared) {
+            null -> {
+                fail("准备配置超时", cause = FailureCause.CoreStartFailed)
+                return
+            }
+            is PreflightResult.Invalid -> {
+                // 配置本身不合法是确定性错误，重试一万次也是同样的结果，
+                // 只会让用户盯着一个永远在「即将重试」的通知。
+                fail(prepared.message, cause = FailureCause.InvalidConfig)
+                return
+            }
+            is PreflightResult.Ready -> prepared.config
+        }
 
-        core.start(prepared.json, workDir).fold(
+        if (!bindOutbound(config.networkPreference)) return
+
+        core.start(config.json, workDir).fold(
             onSuccess = {
                 // 生成配置加起内核有几百毫秒（远程 rule-set 还可能是几十秒），
                 // 这期间用户完全可能已经按了停止。不检查的话状态会被改回 Running，
@@ -243,7 +301,7 @@ class ProxyService : LifecycleService() {
                     withContext(NonCancellable) { core.stop() }
                     return
                 }
-                onStarted(prepared)
+                onStarted(config)
             },
             onFailure = { throwable ->
                 fail(
@@ -253,6 +311,74 @@ class ProxyService : LifecycleService() {
                 )
             },
         )
+    }
+
+    /**
+     * 按偏好绑定出站网卡，绑不上就当成一次失败。
+     *
+     * **静默降级在这里是最贵的错。** 用户选「只走 Wi-Fi」多半是为了不烧流量，选
+     * 「只走蜂窝」多半是因为家里那条线不通；绑不上却照样宣称 Running，出站就跑到了
+     * 他明确排除掉的那张网上，而界面上一切正常 —— 等他发现的时候，代价是一张账单
+     * 或者一整天的排查。
+     *
+     * 归为可重试的失败而不是终态：没插网线、副卡刚开机还没注册上，等一会儿都会好，
+     * 退避重试正好覆盖这段。次数耗尽之后才会落到 Failed，那时通知里写的是绑不上
+     * 哪张网，用户看得懂。
+     *
+     * @return 能不能继续启动。false 表示 [fail] 已经调过了。
+     */
+    private suspend fun bindOutbound(preference: NetworkPreference): Boolean {
+        val binding = networkBinder.apply(preference)
+        if (binding !is OutboundBinding.Unavailable) {
+            degradedStatus = null
+            return true
+        }
+        fail(
+            getString(R.string.service_outbound_degraded, preference.displayName),
+            binding.reason,
+            FailureCause.OutboundBindFailed,
+        )
+        return false
+    }
+
+    /**
+     * 盯着运行期的出站绑定。
+     *
+     * 与启动时那一次检查是两件事：网卡会中途消失（网线被拔、副卡掉网、热点关掉），
+     * 那之后 [NetworkBinder] 会回落到系统默认，出站于是偷偷换了一条链路。
+     *
+     * 这里**不重启也不停机**，只把它说出来。理由是两害相权：为一根被碰掉的网线断掉
+     * 全屋设备的连接，比「暂时走了另一张网」严重得多；而完全不说，用户就永远不知道
+     * 自己设的偏好此刻并没有在生效。所以走通知加一条 Snackbar，网卡回来时自动消失。
+     */
+    private fun observeOutboundBinding() {
+        if (bindingJob?.isActive == true) return
+        bindingJob = networkBinder.binding
+            .onEach { binding ->
+                if (controller.state.value !is ProxyState.Running) return@onEach
+                when (binding) {
+                    is OutboundBinding.Unavailable -> {
+                        val text = getString(
+                            R.string.service_outbound_degraded,
+                            binding.preference.displayName,
+                        )
+                        if (degradedStatus == text) return@onEach
+                        Log.w(TAG, "$text（${binding.reason}）")
+                        degradedStatus = text
+                        controller.postConfigMessage(text)
+                        refreshNotification()
+                    }
+
+                    else -> {
+                        if (degradedStatus == null) return@onEach
+                        Log.i(TAG, "出站网卡已恢复绑定")
+                        degradedStatus = null
+                        refreshNotification()
+                    }
+                }
+            }
+            .catch { cause -> Log.w(TAG, "出站绑定观察中断", cause) }
+            .launchIn(lifecycleScope)
     }
 
     /**
@@ -289,7 +415,7 @@ class ProxyService : LifecycleService() {
         // 而那几秒恰恰是他最急着确认代理有没有恢复的时候。
         clashApi.noteCoreAlive()
         controller.updateConfigOutdated(false)
-        acquireLocks(settings.serviceSettings.first().keepWifiAwake)
+        syncHostSettings()
         startPacIfConfigured(config.inbounds)
 
         controller.updateState(
@@ -306,9 +432,10 @@ class ProxyService : LifecycleService() {
                 warnings = config.warnings,
             ),
         )
-        refreshNotification()
+        refreshNotification(force = true)
         observeTraffic()
         observeNetworkChanges()
+        observeOutboundBinding()
         observeConfigChanges()
         superviseCore()
 
@@ -317,7 +444,7 @@ class ProxyService : LifecycleService() {
         // 每起来一次就清零会让退避永远停留在第一档，变成 10 秒一轮的无限空转。
         // 清零交给健康检查在确认它真的稳住之后做。
         lastCoreStartAt = System.currentTimeMillis()
-        statusOverride = null
+        retryStatus = null
         retryJob?.cancel()
 
         // 记一笔。consume 掉是为了不让下一次内核重启复用同一个来源标签 ——
@@ -331,8 +458,35 @@ class ProxyService : LifecycleService() {
         // 届时内存里的一切都没了，只有这一位能告诉看门狗「它本来开着」。
         settings.setShouldBeRunning(true)
         watchdog.ensureScheduled()
-        // 起来了，之前那条「无法自动恢复」的提醒就不该再挂着
+        // 起来了，之前那两条「没起来」的提醒都不该再挂着
         notifications.cancelRecoveryBlocked()
+        notifications.cancelFailure()
+    }
+
+    /**
+     * 让宿主侧那几项设置就地生效。
+     *
+     * **这是一次审计的产物，原来它们改了等于没改。** `keepWifiAwake` 只在服务启动
+     * 时读过一次，`autoRestartOnFailure` 也一样；而两者都不在 [ConfigDigest.restartKey]
+     * 里，所以连「配置已变更，点击应用」那个提示都不会出现 —— 用户拨了开关、开关也
+     * 确实拨过去了，行为却纹丝不动，且没有任何反馈说明为什么。
+     *
+     * 修法不是把它们并进 restartKey：为了换一把 WifiLock 就重启内核、断掉全屋设备的
+     * 连接，比不生效还糟。它们各自都能就地重做，所以单独比一个指纹，变了就重做。
+     */
+    private suspend fun syncHostSettings() {
+        val service = settings.serviceSettings.first()
+        val key = ConfigDigest.hostKey(
+            keepWifiAwake = service.keepWifiAwake,
+            autoRestartOnFailure = service.autoRestartOnFailure,
+        )
+        if (key == hostKey) return
+        autoRestartOnFailure = service.autoRestartOnFailure
+        acquireLocks(service.keepWifiAwake)
+        // 记账放在最后：这个协程由 collectLatest 驱动，随时可能在挂起点上被取消。
+        // 先记后做的话，被取消的那一次会留下「已经生效」的假账，而下一次比对
+        // 得出「没变化」于是永远不再补做。
+        hostKey = key
     }
 
     /**
@@ -424,18 +578,27 @@ class ProxyService : LifecycleService() {
         // 重启后不重新订阅：这个订阅与内核实例无关，重来一遍只是白白多跑一次比对
         if (configWatchJob?.isActive == true) return
         configWatchJob = lifecycleScope.launch {
-            configChanges.changes().collectLatest {
-                // 手写防抖。导入订阅、批量测速会在极短时间内刷出几十次写入，
-                // 每次都重新生成一份完整配置纯属浪费。
-                delay(CONFIG_SETTLE_DELAY_MS)
-                try {
-                    refreshOutdatedFlag()
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (t: Throwable) {
-                    Log.w(TAG, "配置指纹比对失败", t)
+            configChanges.changes()
+                // 上游是好几条数据库与 DataStore 的流合并出来的，任何一条出错都会
+                // 让整条链断掉；不接住的话那就是一次崩溃，而它想省下的只是一次
+                // 「配置已变更」的提示
+                .catch { cause -> Log.w(TAG, "配置变更监听中断", cause) }
+                .collectLatest {
+                    // 手写防抖。导入订阅、批量测速会在极短时间内刷出几十次写入，
+                    // 每次都重新生成一份完整配置纯属浪费。
+                    delay(CONFIG_SETTLE_DELAY_MS)
+                    try {
+                        // 先做能就地生效的那几项，再去比对需要重启的那些。顺序有意义：
+                        // 用户改的若只是 keepWifiAwake，这一步做完之后指纹比对会得出
+                        // 「没变化」，于是既生效了、又不会给他一个莫名其妙的过期提示。
+                        syncHostSettings()
+                        refreshOutdatedFlag()
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (t: Throwable) {
+                        Log.w(TAG, "配置指纹比对失败", t)
+                    }
                 }
-            }
         }
     }
 
@@ -493,26 +656,38 @@ class ProxyService : LifecycleService() {
                     continue
                 }
 
-                when (liveness.check()) {
-                    CoreLiveness.Verdict.ALIVE ->
-                        // 稳住足够久才算真的好了，这时才把退避计数清掉
-                        if (failureStreak > 0 && coreUptime() >= MIN_HEALTHY_UPTIME_MS) {
-                            Log.i(TAG, "内核已稳定运行，重置退避计数")
-                            failureStreak = 0
+                // 一次探测出意外不能把整条监督线掐掉。这个循环是秒级自愈那一层的
+                // 全部，它死了之后代理照常显示运行中、而内核崩了再也没人管，只剩
+                // 15 分钟一轮的看门狗那张粗网 —— 而且没有任何迹象说明降级发生过。
+                try {
+                    when (liveness.check()) {
+                        CoreLiveness.Verdict.ALIVE ->
+                            // 稳住足够久才算真的好了，这时才把退避计数清掉
+                            if (failureStreak > 0 && coreUptime() >= MIN_HEALTHY_UPTIME_MS) {
+                                Log.i(TAG, "内核已稳定运行，重置退避计数")
+                                failureStreak = 0
+                            }
+
+                        CoreLiveness.Verdict.WATCHING ->
+                            Log.i(
+                                TAG,
+                                "内核存活探测第 ${liveness.consecutiveMisses} 次失败，再观察一轮",
+                            )
+
+                        CoreLiveness.Verdict.DEAD -> {
+                            Log.w(TAG, "内核已连续 $HEALTH_MISSES_BEFORE_REVIVE 次不响应，尝试拉起")
+                            runApply("内核自愈") { reviveCore() }
                         }
-
-                    CoreLiveness.Verdict.WATCHING ->
-                        Log.i(TAG, "内核存活探测第 ${liveness.consecutiveMisses} 次失败，再观察一轮")
-
-                    CoreLiveness.Verdict.DEAD -> {
-                        Log.w(TAG, "内核已连续 $HEALTH_MISSES_BEFORE_REVIVE 次不响应，尝试拉起")
-                        runApply("内核自愈") { reviveCore() }
                     }
-                }
 
-                if (++checksSinceMetrics >= METRICS_LOG_EVERY_N_CHECKS) {
-                    checksSinceMetrics = 0
-                    logRuntimeMetrics()
+                    if (++checksSinceMetrics >= METRICS_LOG_EVERY_N_CHECKS) {
+                        checksSinceMetrics = 0
+                        logRuntimeMetrics()
+                    }
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (t: Throwable) {
+                    Log.w(TAG, "内核存活探测出错，下一轮继续", t)
                 }
             }
         }
@@ -597,6 +772,11 @@ class ProxyService : LifecycleService() {
                 current = network
                 scheduleNetworkRecovery()
             }
+            // catch 放在 onEach **之后**：这样它既接得住上游（部分 ROM 裁剪权限时
+            // registerDefaultNetworkCallback 抛 SecurityException），也接得住处理过程
+            // 本身。这条流用 launchIn 收集，任何一处漏出去都是一次服务崩溃，也就是
+            // 全屋断网 —— 而失去切网自愈只是失去一层自愈，两者不在一个量级。
+            .catch { cause -> Log.w(TAG, "默认网络监听中断，切网自愈已停用", cause) }
             .launchIn(lifecycleScope)
     }
 
@@ -650,10 +830,22 @@ class ProxyService : LifecycleService() {
         if (watched.isEmpty()) return false
         if (!settings.serviceSettings.first().powerSave) return false
 
-        val missing = watched.filterNot { addressDiscovery.isAddressPresent(it) }
+        val missing = addressDiscovery.missingAddresses(watched)
         if (missing.isEmpty()) return false
 
-        Log.i(TAG, "省电模式：监听地址 ${missing.joinToString("、")} 已不存在，停止服务")
+        // **停机之前一定要再确认一次。** 这条路径的后果是不可逆的：它会连运行意图
+        // 一起清掉，看门狗不会来救，用户只能手动开回来。而 Wi-Fi 重连、热点重启、
+        // DHCP 续租都会让地址消失个一两秒 —— 拿那一瞬间的快照当证据，等于一次网络
+        // 抖动就把全屋的网关永久关掉，而且用户完全不知道发生了什么。
+        delay(POWER_SAVE_CONFIRM_DELAY_MS)
+        if (controller.state.value !is ProxyState.Running) return false
+        val stillMissing = addressDiscovery.missingAddresses(missing)
+        if (stillMissing.isEmpty()) {
+            Log.i(TAG, "省电模式：监听地址只是短暂消失，已恢复，不停机")
+            return false
+        }
+
+        Log.i(TAG, "省电模式：监听地址 ${stillMissing.joinToString("、")} 已不存在，停止服务")
         // 这是用户在设置里明确要求的停机，同样要清掉运行意图 ——
         // 否则看门狗 15 分钟后又把它拉起来，省电模式就成了摆设
         stopProxy(forgetRunIntent = true)
@@ -671,7 +863,7 @@ class ProxyService : LifecycleService() {
             ?: System.currentTimeMillis()
 
         controller.updateState(ProxyState.Starting)
-        refreshNotification()
+        refreshNotification(force = true)
         trafficJob?.cancel()
         pacServer.stop()
 
@@ -682,7 +874,7 @@ class ProxyService : LifecycleService() {
         // bindProcessToNetwork 只影响之后新建的 socket，改了偏好就得赶在内核起来前落定。
         // 没改就别动：重新 requestNetwork 是异步的，中间那段空窗期反而会让出站临时跑回默认网络。
         if (runningConfig?.networkPreference != config.networkPreference) {
-            networkBinder.apply(config.networkPreference)
+            if (!bindOutbound(config.networkPreference)) return
         }
         val result = core.start(config.json, filesDir.absolutePath)
 
@@ -726,7 +918,13 @@ class ProxyService : LifecycleService() {
     private fun observeTraffic() {
         trafficJob?.cancel()
         trafficJob = lifecycleScope.launch {
-            val api = settings.clashApiSettings()
+            // 读不到 Clash API 配置就只是没有速率显示。这一句抛出去的话，
+            // lifecycleScope 的默认处理是让整个进程崩掉 —— 为一块界面上的数字，
+            // 代价是全屋断网。
+            val api = runCatching { settings.clashApiSettings() }.getOrElse {
+                Log.w(TAG, "读取 Clash API 配置失败，流量统计未启用", it)
+                return@launch
+            }
             // 内核重启会把自己的计数器清零，但对用户来说这仍是同一次会话，
             // 累计流量不该跟着归零。
             var totalUp = controller.traffic.value.totalUploadBytes
@@ -775,6 +973,11 @@ class ProxyService : LifecycleService() {
         controller.updateState(ProxyState.Stopped)
         stopForeground(STOP_FOREGROUND_REMOVE)
         notifications.cancel()
+        if (forgetRunIntent) {
+            // 用户明确不想让它跑了，那两条催他恢复的提醒就该一起撤掉
+            notifications.cancelRecoveryBlocked()
+            notifications.cancelFailure()
+        }
         stopSelf()
     }
 
@@ -813,6 +1016,11 @@ class ProxyService : LifecycleService() {
         controller.updateState(ProxyState.Failed(message, detail))
         stopForeground(STOP_FOREGROUND_REMOVE)
         notifications.cancel()
+        // **终态失败必须留下痕迹。** 以前这里到此为止：前台通知被撤掉、服务退出，
+        // 用户那边什么都不会发生 —— 一个给全屋供网的网关就这么无声无息地没了，
+        // 别的设备表现为「网页打不开」，而手机上没有任何东西指向原因。
+        notifications.ensureChannel()
+        notifications.notifyFailure(message, detail, retryable = !cause.deterministic)
         stopSelf()
     }
 
@@ -831,21 +1039,30 @@ class ProxyService : LifecycleService() {
         shutdownDetached()
         trafficJob?.cancel()
         controller.updateState(ProxyState.Starting)
-        statusOverride = getString(
-            R.string.service_retry_pending,
-            reason,
-            delayMs / MILLIS_PER_SECOND,
-        )
-        refreshNotification()
 
         // 这里取消的一定是「已经跑完、正在收尾」的那个自己：能走到 fail() 说明
         // 启动路径正在栈上执行，不可能同时有另一个重试在 delay 里睡着。
         retryJob?.cancel()
         retryJob = lifecycleScope.launch {
-            delay(delayMs)
-            // 等待期间用户可能已经按了停止
-            if (controller.state.value !is ProxyState.Starting) return@launch
-            statusOverride = null
+            // 真的走一遍倒计时，而不是把「30 秒后重试」这句话挂满 30 秒。
+            // 一条半分钟一动不动的通知和一条卡死的通知在用户眼里没有区别，而这条
+            // 通知恰恰出现在「代理刚挂掉」的时刻 —— 那正是他最需要知道「它还在自己
+            // 想办法」的时候。每秒一次刷新，内容判重会把没变化的那些挡在 notify 之前。
+            var remaining = delayMs
+            while (remaining > 0) {
+                retryStatus = getString(
+                    R.string.service_retry_pending,
+                    reason,
+                    (remaining + MILLIS_PER_SECOND - 1) / MILLIS_PER_SECOND,
+                )
+                refreshNotification()
+                val step = minOf(RETRY_TICK_MS, remaining)
+                delay(step)
+                remaining -= step
+                // 倒计时期间用户可能已经按了停止
+                if (controller.state.value !is ProxyState.Starting) return@launch
+            }
+            retryStatus = null
             refreshNotification()
             try {
                 launchCore()
@@ -891,6 +1108,7 @@ class ProxyService : LifecycleService() {
         configWatchJob?.cancel()
         healthJob?.cancel()
         retryJob?.cancel()
+        bindingJob?.cancel()
         startJob = null
         applyJob = null
         networkSettleJob = null
@@ -899,6 +1117,7 @@ class ProxyService : LifecycleService() {
         configWatchJob = null
         healthJob = null
         retryJob = null
+        bindingJob = null
         failureStreak = 0
 
         shutdownDetached()
@@ -906,7 +1125,11 @@ class ProxyService : LifecycleService() {
         networkBinder.release()
         releaseLocks()
         runningConfig = null
+        hostKey = null
         lastNotified = null
+        lastNotifiedAt = 0
+        retryStatus = null
+        degradedStatus = null
         controller.updateConfigOutdated(false)
     }
 
@@ -970,13 +1193,27 @@ class ProxyService : LifecycleService() {
     }
 
     /**
-     * @return 是否成功进入前台。Android 12+ 会在后台启动前台服务时抛异常 ——
-     *         START_STICKY 的进程重建正好落在这个口子上，不接住就是一次崩溃。
+     * 进入前台。
+     *
+     * **类型选 specialUse 在 Android 15 上还有一层意义。** 15 起，从
+     * `BOOT_COMPLETED` 拉起的前台服务被限制了类型：`dataSync`、`mediaProcessing`、
+     * `camera`、`microphone` 等一律拒绝，而 `specialUse` 不在名单里 —— 换句话说，
+     * 换成看起来更「贴切」的 dataSync 不只是会撞上那个 6 小时上限，连开机自启这条
+     * 路都会一起断掉。
+     *
+     * `startForeground` 在这一层可能抛出好几种互不相关的异常：Android 12+ 的
+     * `ForegroundServiceStartNotAllowedException`（后台启动被拦）、14+ 的
+     * `SecurityException`（清单里少声明 FGS 类型权限）、以及
+     * `InvalidForegroundServiceTypeException`。它们的共同点是**都会杀掉进程**，
+     * 所以这里一律接住 —— 一次可恢复的「没能进前台」不值得升级成一次崩溃。
+     *
+     * @return 是否成功进入前台。
      */
     private fun promoteToForeground(): Boolean {
         val content = notifications.content(controller.state.value, controller.traffic.value)
         val notification = notifications.build(content, contentIntent, requireStopIntent())
         lastNotified = content
+        lastNotifiedAt = System.currentTimeMillis()
         return runCatching {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
                 startForeground(
@@ -990,15 +1227,30 @@ class ProxyService : LifecycleService() {
         }.onFailure { Log.w(TAG, "提升为前台服务失败", it) }.isSuccess
     }
 
-    private fun refreshNotification() {
+    /**
+     * @param force 无视速率限制。状态迁移必须立刻反映出来 —— 用户按了停止却要等
+     *        大半秒通知才变，那半秒里他多半已经又按了一次。
+     */
+    private fun refreshNotification(force: Boolean = false) {
         val content = notifications.content(
             state = controller.state.value,
             traffic = controller.traffic.value,
-            statusText = statusOverride,
+            // 倒计时压过降级提示：两者同时成立时（绑不上网卡导致启动失败、进而退避
+            // 重试），用户此刻最需要知道的是「还有几秒会再试一次」。
+            statusText = retryStatus ?: degradedStatus,
         )
         // 内容一个字都没变的话，这次 notify 就只是一次白花的主线程 Binder 调用
         if (content == lastNotified) return
+
+        // 判重挡不住速率读数：它每一帧都在变，而流量流在高负载下每秒能来好几帧，
+        // 每一帧一次主线程 Binder 调用 —— 恰好落在设备最忙的时候。标题变了（也就是
+        // 状态真的迁移了）一律放行，被压下去的只有正文里的数字。
+        val now = System.currentTimeMillis()
+        val titleChanged = content.title != lastNotified?.title
+        if (!force && !titleChanged && now - lastNotifiedAt < MIN_NOTIFY_INTERVAL_MS) return
+
         lastNotified = content
+        lastNotifiedAt = now
         notifications.notify(notifications.build(content, contentIntent, requireStopIntent()))
     }
 
@@ -1061,6 +1313,12 @@ class ProxyService : LifecycleService() {
         wifiLock = null
     }
 
+    /** 启动前置准备的三种结局。用密封类而不是可空返回值，是为了区分「超时」和「不合法」。 */
+    private sealed interface PreflightResult {
+        data class Ready(val config: AppliedConfig) : PreflightResult
+        data class Invalid(val message: String) : PreflightResult
+    }
+
     /** 已经（或即将）交给内核的一份配置，连同生成它时的入站快照。 */
     private data class AppliedConfig(
         val json: String,
@@ -1085,6 +1343,14 @@ class ProxyService : LifecycleService() {
         const val ACTION_START = "com.niceproxy.action.START"
         const val ACTION_STOP = "com.niceproxy.action.STOP"
         const val ACTION_RELOAD = "com.niceproxy.action.RELOAD"
+
+        /**
+         * 「不再尝试」。停止，并清掉落盘的运行意图。
+         *
+         * 与 [ACTION_STOP] 的行为其实一致，单独一个动作是为了让失败通知上那个按钮的
+         * 意图在日志和代码里都写明白 —— 它面对的是「服务根本没在跑」的处境。
+         */
+        const val ACTION_GIVE_UP = "com.niceproxy.action.GIVE_UP"
 
         /** [StartReason] 的名字。缺失或认不出来时按用户手动处理。 */
         const val EXTRA_START_REASON = "com.niceproxy.extra.START_REASON"
@@ -1136,6 +1402,35 @@ class ProxyService : LifecycleService() {
         private const val FINGERPRINT_LOG_LENGTH = 12
 
         private const val MILLIS_PER_SECOND = 1_000L
+
+        /**
+         * 「读设置 + 生成配置 + 绑定网卡」这一段的上界。
+         *
+         * 内核启动那一步有自己的两层截止时间，不在这里面。这一段本该是几百毫秒的
+         * 纯本地工作，定得宽松纯粹是为了低端设备上首次冷启动时的 Room 初始化。
+         * 有这个上界，状态就不可能永远停在 Starting。
+         */
+        private const val PREFLIGHT_TIMEOUT_MS = 20_000L
+
+        /**
+         * 省电停机前的复核间隔。
+         *
+         * Wi-Fi 重连、热点重启、DHCP 续租都会让地址消失一两秒，而这条路径的后果是
+         * 不可逆的（连运行意图一起清掉，看门狗不会来救）。取值只要盖住这类抖动即可，
+         * 再长就变成「关掉屏幕之后还要等半天才省电」。
+         */
+        private const val POWER_SAVE_CONFIRM_DELAY_MS = 5_000L
+
+        /** 退避倒计时的刷新粒度。 */
+        private const val RETRY_TICK_MS = 1_000L
+
+        /**
+         * 两次通知下发之间的最小间隔。
+         *
+         * 只约束正文里的速率数字，状态迁移（标题变化）一律立刻放行。取值要小于人眼
+         * 觉得「卡住了」的阈值，又要能把每秒好几帧的流量更新压到一次。
+         */
+        private const val MIN_NOTIFY_INTERVAL_MS = 800L
     }
 }
 

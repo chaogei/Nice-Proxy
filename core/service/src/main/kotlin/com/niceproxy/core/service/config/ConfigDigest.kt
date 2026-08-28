@@ -25,6 +25,10 @@ import java.security.MessageDigest
  * 2. **少算了两件宿主侧的事**。PAC 由应用自己的 ServerSocket 提供（§6.5），出站网卡
  *    绑定由 `ConnectivityManager` 完成（§6.7），两者都不出现在 sing-box 配置里 ——
  *    只盯着内核配置的话，改了 PAC 端口或出站网卡这边毫无感知，用户会以为设置没生效。
+ *
+ * 还有第三类设置：它们同样不在内核配置里，但**改了也不需要重启内核**。那种东西不能
+ * 塞进 [restartKey] —— 为了换一把 WifiLock 就断掉全屋设备的连接，比不生效还糟。
+ * 它们单独走 [hostKey]，见那里。
  */
 internal object ConfigDigest {
 
@@ -47,6 +51,33 @@ internal object ConfigDigest {
         pacDirectFallback.toString(),
         networkPreference.name,
     ).joinToString(SEPARATOR).sha256()
+
+    /**
+     * 那些**不用重启内核**、但服务在启动时快照下来就再没看过的宿主侧设置。
+     *
+     * 这一位是一次审计的产物。原先它们全都只在 `ProxyService.onStarted` /
+     * `launchCore` 里读一次，此后无论用户怎么改都不会有任何反应，而且因为它们不在
+     * [restartKey] 里，连「配置已变更，点击应用」的提示都不会出现 —— 用户拨了开关、
+     * 界面上开关也确实拨过去了，行为却纹丝不动，这是最难自查的一类 bug。
+     *
+     * 修的方式不是把它们并进 [restartKey]：那会让「换一把 WifiLock」这种事付出断掉
+     * 全屋连接的代价。它们各自都能就地生效，所以单独出一个指纹，服务比对到变化就
+     * 直接重做那一步。
+     *
+     * 同样刻意逐个列参数而不是收整个 `ServiceSettings`，理由见 [restartKey]。
+     *
+     * @param keepWifiAwake 决定要不要持有 WifiLock。就地重新获取/释放即可。
+     * @param autoRestartOnFailure 失败重试开关。失败路径必须同步执行，所以服务持有的
+     *        是一份快照；这一位变了要把那份快照换掉，否则用户关了自动重试，代理还是
+     *        会自己一遍遍重来。
+     */
+    fun hostKey(
+        keepWifiAwake: Boolean,
+        autoRestartOnFailure: Boolean,
+    ): String = listOf(
+        keepWifiAwake.toString(),
+        autoRestartOnFailure.toString(),
+    ).joinToString(SEPARATOR)
 
     private fun normalize(configJson: String): String = runCatching {
         val root = Json.parseToJsonElement(configJson).jsonObject

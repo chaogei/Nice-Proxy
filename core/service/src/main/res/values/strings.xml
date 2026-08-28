@@ -15,8 +15,18 @@
     <string name="service_speed_format">↑ %1$s  ↓ %2$s</string>
     <string name="service_retry_pending">%1$s · %2$d 秒后重试</string>
 
+    <!-- 出站网卡没绑上时的降级提示。代理还在跑，但走的不是用户指定的那张网。 -->
+    <string name="service_outbound_degraded">未能绑定到%1$s，出站正走系统默认网络</string>
+
+    <string name="service_failed_title">代理已停止运行</string>
+    <string name="action_retry">立即重试</string>
+    <string name="action_start_now">立即启动</string>
+    <string name="action_battery_settings">关闭电池优化</string>
+    <string name="action_give_up">不再尝试</string>
+
     <string name="keepalive_channel_name">保活提醒</string>
     <string name="keepalive_channel_description">代理被系统停止且无法自动恢复时提醒你</string>
     <string name="keepalive_blocked_title">代理已停止，且无法自动恢复</string>
-    <string name="keepalive_blocked_text">系统阻止了后台自动重启。点此打开应用恢复运行，并在设置中关闭本应用的电池优化，否则下次仍会这样。</string>
+    <string name="keepalive_blocked_text">系统阻止了后台自动重启。点「立即启动」可以直接恢复；要让它以后能自己恢复，请关闭本应用的电池优化。</string>
+    <string name="keepalive_blocked_text_with_reason">系统阻止了后台自动重启（%1$s）。点「立即启动」可以直接恢复；要让它以后能自己恢复，请关闭本应用的电池优化。</string>
 </resources>

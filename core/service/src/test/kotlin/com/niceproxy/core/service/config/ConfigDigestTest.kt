@@ -5,6 +5,7 @@ import com.niceproxy.core.model.InboundService
 import com.niceproxy.core.model.InboundType
 import com.niceproxy.core.model.NetworkPreference
 import org.junit.jupiter.api.DisplayName
+import org.junit.jupiter.api.Nested
 import org.junit.jupiter.api.Test
 
 class ConfigDigestTest {
@@ -85,6 +86,56 @@ class ConfigDigestTest {
         val minimal = """{ "log": { "level": "info" } }"""
 
         assertThat(key(minimal)).isEqualTo(key(minimal))
+    }
+
+    @Nested
+    @DisplayName("宿主侧那几项不用重启内核的设置")
+    inner class HostKey {
+
+        @Test
+        @DisplayName("保持 Wi-Fi 唤醒变了要能看出来")
+        fun detectsKeepWifiAwake() {
+            // 这一位以前只在服务启动时读过一次，改了之后既不生效、也不会提示
+            // 「配置已变更」—— 开关拨过去了、行为纹丝不动，是最难自查的一类 bug
+            assertThat(ConfigDigest.hostKey(keepWifiAwake = true, autoRestartOnFailure = true))
+                .isNotEqualTo(
+                    ConfigDigest.hostKey(keepWifiAwake = false, autoRestartOnFailure = true),
+                )
+        }
+
+        @Test
+        @DisplayName("自动重试开关变了要能看出来")
+        fun detectsAutoRestart() {
+            // 服务持有的是一份快照（失败路径必须同步执行），不换掉那份快照的话，
+            // 用户关了自动重试，代理还是会自己一遍遍重来
+            assertThat(ConfigDigest.hostKey(keepWifiAwake = true, autoRestartOnFailure = true))
+                .isNotEqualTo(
+                    ConfigDigest.hostKey(keepWifiAwake = true, autoRestartOnFailure = false),
+                )
+        }
+
+        @Test
+        @DisplayName("没变就是没变，不会白白重做一遍")
+        fun stableWhenUnchanged() {
+            assertThat(ConfigDigest.hostKey(keepWifiAwake = true, autoRestartOnFailure = false))
+                .isEqualTo(
+                    ConfigDigest.hostKey(keepWifiAwake = true, autoRestartOnFailure = false),
+                )
+        }
+
+        @Test
+        @DisplayName("它和重启指纹是两条独立的比对，不许互相污染")
+        fun independentFromRestartKey() {
+            // 合成一个指纹的话，换一把 WifiLock 就会重启内核、断掉全屋设备的连接 ——
+            // 那比设置不生效还糟
+            val before = key(config())
+            val after = key(config())
+
+            assertThat(before).isEqualTo(after)
+            assertThat(before).isNotEqualTo(
+                ConfigDigest.hostKey(keepWifiAwake = true, autoRestartOnFailure = true),
+            )
+        }
     }
 
     private fun key(

@@ -63,6 +63,11 @@ class ProxyServiceController @Inject constructor(
      * @param reason 谁发起的这次启动。它不影响启动逻辑，只用于记账 ——
      *        「被杀之后自动恢复」和「用户自己点的」在服务眼里长得一模一样，
      *        不带上这个标签就永远分不出保活到底有没有在起作用。
+     *
+     * **这个方法会抛。** Android 12+ 在后台调 `startForegroundService` 抛
+     * `ForegroundServiceStartNotAllowedException`，而那正是看门狗判断「自动恢复被
+     * 挡住了」的唯一依据（见 `ProxyWatchdogWorker`）。在这里 runCatching 掉的话，
+     * 保活链条上最坏的那一格会变得完全不可观测。调用方各自决定怎么接。
      */
     fun start(reason: StartReason = StartReason.USER) {
         ContextCompat.startForegroundService(
@@ -73,14 +78,34 @@ class ProxyServiceController @Inject constructor(
         )
     }
 
+    /**
+     * 与 [start] 相反，停止**不允许**抛出去。
+     *
+     * `startService` 在服务已经没了、而应用又在后台时会抛 IllegalStateException。
+     * 那种情况下代理本来就是停的，用户要的结果已经达成了，把异常抛给界面只会变成
+     * 一次「按停止按钮导致崩溃」。
+     */
     fun stop() {
-        context.startService(
-            Intent(context, ProxyService::class.java).setAction(ProxyService.ACTION_STOP),
-        )
+        runCatching {
+            context.startService(
+                Intent(context, ProxyService::class.java).setAction(ProxyService.ACTION_STOP),
+            )
+        }.onFailure { Log.w(TAG, "停止指令未能送达服务，多半它已经不在了", it) }
     }
 
+    /**
+     * 正在停的时候什么也不做。
+     *
+     * [ProxyState.Stopping] 不算 active，照旧的写法会在这时候走 start 分支 ——
+     * 用户按停止之后手快再点一下磁贴，代理就在关到一半的时候又被拉起来，而那两条
+     * 路径正好一个在关内核、一个在开内核。
+     */
     fun toggle() {
-        if (_state.value.isActive) stop() else start()
+        when {
+            _state.value is ProxyState.Stopping -> return
+            _state.value.isActive -> stop()
+            else -> start()
+        }
     }
 
     /**
@@ -100,7 +125,7 @@ class ProxyServiceController @Inject constructor(
         if (_state.value.isActive) {
             stop()
         } else {
-            _state.value = ProxyState.Stopped
+            updateState(ProxyState.Stopped)
         }
     }
 
@@ -127,18 +152,35 @@ class ProxyServiceController @Inject constructor(
     fun reapplyConfig() {
         // 没在跑就没有「重新应用」可言，此时也不该从后台把服务拉起来
         if (!_state.value.isActive) return
-        context.startService(
-            Intent(context, ProxyService::class.java).setAction(ProxyService.ACTION_RELOAD),
-        )
+        runCatching {
+            context.startService(
+                Intent(context, ProxyService::class.java).setAction(ProxyService.ACTION_RELOAD),
+            )
+        }.onFailure { Log.w(TAG, "重新应用指令未能送达服务", it) }
     }
 
     fun consumeConfigMessage() {
         _configMessage.value = null
     }
 
-    /** 仅供 [ProxyService] 回写状态。 */
-    internal fun updateState(state: ProxyState) {
+    /**
+     * 仅供 [ProxyService] 回写状态。
+     *
+     * 非法迁移直接丢弃，见 [ProxyStateMachine]。会被拒绝的那些全都来自已经过时的
+     * 路径 —— 最典型的是「用户按了停止，而那条还在飞的启动协程终于等到内核起来」，
+     * 放它进来的话界面会显示一个根本不存在的运行中代理，而且怎么点都停不掉。
+     *
+     * @return 这次更新有没有被接受。调用方通常不用管；关心的地方（比如需要据此决定
+     *         要不要继续往下走）可以看。
+     */
+    internal fun updateState(state: ProxyState): Boolean {
+        val current = _state.value
+        if (!ProxyStateMachine.canTransition(current, state)) {
+            Log.i(TAG, "丢弃过时的状态更新：$current → $state")
+            return false
+        }
         _state.value = state
+        return true
     }
 
     internal fun updateTraffic(snapshot: TrafficSnapshot) {

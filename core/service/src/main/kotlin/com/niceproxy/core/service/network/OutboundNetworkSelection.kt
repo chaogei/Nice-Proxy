@@ -21,11 +21,16 @@ import javax.net.SocketFactory
  * @param socketFactoryOf 取这张网络专属的 socket 工厂，即 `Network.getSocketFactory()`。
  * @param bindProcess 把整个进程新建的 socket 绑到这张网上，即
  *        `ConnectivityManager.bindProcessToNetwork`。传 null 表示回到系统默认。
+ * @param onSelected 每一次**落定**都会通知，包括回落到 null。用户挑了「只走蜂窝」
+ *        而蜂窝掉了的时候，这里传出去的 null 就是「出站已经悄悄退回系统默认网络」——
+ *        没有这个回调，那件事在界面上没有任何迹象，而它恰恰是用户设这个偏好想避免的。
+ *        回调在锁内同步执行，实现里不许阻塞或反过来调本类的方法。
  */
 internal class OutboundNetworkSelection<T : Any>(
     private val latencyTester: LatencyTester,
     private val socketFactoryOf: (T) -> SocketFactory?,
     private val bindProcess: (T?) -> Unit,
+    private val onSelected: (T?) -> Unit = {},
 ) {
 
     private val lock = Any()
@@ -88,5 +93,6 @@ internal class OutboundNetworkSelection<T : Any>(
     private fun apply(network: T?) {
         bindProcess(network)
         latencyTester.bindTo(network?.let(socketFactoryOf))
+        onSelected(network)
     }
 }

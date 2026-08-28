@@ -12,6 +12,7 @@ import com.niceproxy.core.datastore.SettingsDataStore
 import com.niceproxy.core.model.StartReason
 import com.niceproxy.core.service.ProxyNotifications
 import com.niceproxy.core.service.ProxyServiceController
+import com.niceproxy.core.service.ProxyState
 import dagger.assisted.Assisted
 import dagger.assisted.AssistedInject
 import kotlinx.coroutines.flow.first
@@ -51,6 +52,10 @@ class ProxyWatchdogWorker @AssistedInject constructor(
         // 用户主动停过就别自作主张。这一位是落盘的，进程重建后依然可信。
         if (!settings.shouldBeRunning.first()) return Result.success()
         if (controller.state.value.isActive) return Result.success()
+        // 正在关的过程中别插一脚。Stopping 不算 active，照旧的写法这里会在内核还没
+        // 关完的时候再发一次启动，两条路径一个在关、一个在开，端口冲突就是这么来的。
+        // 关完之后运行意图那一位会是 false，下一轮自然不会再来。
+        if (controller.state.value is ProxyState.Stopping) return Result.success()
 
         Log.i(TAG, "代理应当运行但当前未运行，尝试拉起")
         return try {
@@ -65,7 +70,9 @@ class ProxyWatchdogWorker @AssistedInject constructor(
             // 而且完全无从判断原因，所以必须让他知道。
             Log.w(TAG, "拉起失败，提醒用户", t)
             notifications.ensureChannel()
-            notifications.notifyRecoveryBlocked()
+            // 带上原始报错。同一条「无法自动恢复」背后可能是后台启动限制，也可能是
+            // 权限被 ROM 收走，两者的出路完全不同，只给一句通用文案等于让用户瞎猜。
+            notifications.notifyRecoveryBlocked(t.message)
             // 不返回 retry：周期任务下一轮还会来，而 retry 的退避会打乱固定节奏。
             Result.success()
         }

@@ -36,10 +36,14 @@ class OutboundNetworkSelectionTest {
     /** 进程级绑定的下发历史，null 表示回到系统默认网络。 */
     private val processBindings = mutableListOf<String?>()
 
+    /** 对外通告的选中结果，[NetworkBinder] 靠它把「绑定丢了」变成用户看得见的事。 */
+    private val announced = mutableListOf<String?>()
+
     private val selection = OutboundNetworkSelection<String>(
         latencyTester = tester,
         socketFactoryOf = { factories.getValue(it) },
         bindProcess = { processBindings += it },
+        onSelected = { announced += it },
     )
 
     @AfterEach
@@ -151,6 +155,62 @@ class OutboundNetworkSelectionTest {
             selection.onAvailable(WIFI)
 
             assertThat(processBindings).containsExactly(WIFI)
+        }
+    }
+
+    @Nested
+    @DisplayName("选中结果要对外说出去")
+    inner class Announcements {
+
+        @Test
+        @DisplayName("绑上了要通告，好让界面知道偏好确实生效了")
+        fun announcesBinding() {
+            selection.onAvailable(WIFI)
+
+            assertThat(announced).containsExactly(WIFI)
+        }
+
+        @Test
+        @DisplayName("最后一张网也掉了要通告 null —— 出站已经悄悄退回系统默认了")
+        fun announcesFallbackToDefault() {
+            // 这是用户设「只走蜂窝」时最该被告知的一件事：副卡掉网之后，流量会
+            // 一声不响地跑到 Wi-Fi 上去，而界面上没有任何迹象。
+            selection.onAvailable(CELLULAR)
+
+            selection.onLost(CELLULAR)
+
+            assertThat(announced).containsExactly(CELLULAR, null).inOrder()
+        }
+
+        @Test
+        @DisplayName("还有别的同类网络时不算丢，不该报警")
+        fun noAlarmWhileAnotherRemains() {
+            selection.onAvailable(CELLULAR)
+            selection.onAvailable(WIFI)
+
+            selection.onLost(WIFI)
+
+            assertThat(announced).containsExactly(CELLULAR, WIFI, CELLULAR).inOrder()
+            assertThat(announced).doesNotContain(null)
+        }
+
+        @Test
+        @DisplayName("重复通告同一张网不会重复打扰")
+        fun duplicatesAreNotAnnounced() {
+            selection.onAvailable(WIFI)
+            selection.onAvailable(WIFI)
+
+            assertThat(announced).containsExactly(WIFI)
+        }
+
+        @Test
+        @DisplayName("主动解除偏好也会通告 —— 那一步同样要把界面上的告警撤掉")
+        fun clearIsAnnounced() {
+            selection.onAvailable(WIFI)
+
+            selection.clear()
+
+            assertThat(announced).containsExactly(WIFI, null).inOrder()
         }
     }
 

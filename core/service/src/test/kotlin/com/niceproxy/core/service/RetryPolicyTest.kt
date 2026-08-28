@@ -130,6 +130,20 @@ internal class RetryPolicyTest {
         }
 
         @Test
+        @DisplayName("出站网卡绑不上算暂时性 —— 插上网线、副卡注册上之后就会好")
+        fun outboundBindFailureIsTransient() {
+            // 它必须是一次**失败**而不是一句日志：绑不上就意味着出站正跑在用户明确
+            // 排除掉的那张网上（多半是计费的蜂窝）。但也不能是终态 —— 没插网线这种
+            // 事，等一会儿就好了，直接躺平反而把可恢复的情况变成不可恢复的。
+            assertThat(FailureCause.OutboundBindFailed.deterministic).isFalse()
+            assertThat(
+                RetryPolicy.shouldRetry(1, FailureCause.OutboundBindFailed, enabled = true),
+            ).isTrue()
+            assertThat(RetryPolicy.shouldForgetRunIntent(FailureCause.OutboundBindFailed))
+                .isFalse()
+        }
+
+        @Test
         @DisplayName("分不清成因时按暂时性处理")
         fun unknownIsTransient() {
             assertThat(FailureCause.Unknown.deterministic).isFalse()
