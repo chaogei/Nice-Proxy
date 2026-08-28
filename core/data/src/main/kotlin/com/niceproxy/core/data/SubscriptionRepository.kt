@@ -7,6 +7,7 @@ import com.niceproxy.core.model.ServerGroup
 import com.niceproxy.core.network.SubscriptionFetcher
 import com.niceproxy.core.network.SubscriptionRequest
 import com.niceproxy.core.network.SubscriptionResponse
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.withContext
 import java.util.UUID
@@ -163,7 +164,16 @@ class SubscriptionRepository @Inject constructor(
             suggestedName = body.suggestedName,
         ).getOrElse { return fail(group, it, recordFailure) }
 
-        serverRepository.saveGroupWithServers(outcome.group, outcome.nodes)
+        // 落库这一段自己也会失败（磁盘写满、约束冲突），而它抛出来的是异常不是
+        // Result。漏在外面的话，一次「全部更新」里的一条订阅写失败就会把整批
+        // 掀掉。失败原因不往分组上写：写不进节点表时多半也写不进分组表。
+        try {
+            serverRepository.saveGroupWithServers(outcome.group, outcome.nodes)
+        } catch (cancellation: CancellationException) {
+            throw cancellation
+        } catch (failure: Throwable) {
+            return Result.failure(failure)
+        }
 
         return Result.success(
             UpdateOutcome(

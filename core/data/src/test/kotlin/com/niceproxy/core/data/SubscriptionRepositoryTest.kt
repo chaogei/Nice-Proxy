@@ -8,6 +8,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.test.runTest
 import mockwebserver3.MockResponse
 import mockwebserver3.MockWebServer
+import mockwebserver3.QueueDispatcher
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.DisplayName
@@ -36,7 +37,16 @@ internal class SubscriptionRepositoryTest {
 
     @BeforeEach
     fun setUp() {
-        server = MockWebServer().apply { start() }
+        server = MockWebServer().apply {
+            // 拉取失败会按退避重试（见 SubscriptionFetcher.RetryPolicy），所以一条
+            // 「服务端返回 500」的用例发出的请求比排进去的响应多。队列空了默认是把
+            // 连接挂住，于是重试要等满 callTimeout —— 这里的用例只关心「这次刷新失败
+            // 了」，让空队列立刻回 503 即可，重试拿到的仍是可重试的失败。
+            dispatcher = QueueDispatcher().apply {
+                setFailFast(MockResponse.Builder().code(503).build())
+            }
+            start()
+        }
         groupDao = FakeServerGroupDao()
         serverDao = FakeServerDao(groupDao)
         serverRepository = ServerRepository(
