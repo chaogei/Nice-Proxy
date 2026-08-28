@@ -16,9 +16,7 @@
     <!-- ============================ 通用 ============================ -->
     <string name="common_back">返回</string>
     <string name="common_cancel">取消</string>
-    <string name="common_confirm">确定</string>
     <string name="common_delete">删除</string>
-    <string name="common_copy">复制</string>
     <string name="common_share">分享</string>
     <string name="common_close">关闭</string>
     <string name="common_retry">重试</string>
@@ -122,6 +120,42 @@
     <string name="node_edit_name">名称</string>
     <string name="node_edit_server">服务器地址</string>
     <string name="node_edit_port">端口</string>
+
+    <!-- ============================ 入站 ============================ -->
+    <!--
+      类型名与说明在 core:model 的 InboundType 里是写死的中文常量，而那一层
+      没有 Context。在 app 层重新映射，让它跟着界面语言走。
+    -->
+    <string name="inbound_type_mixed">混合代理</string>
+    <string name="inbound_type_mixed_desc">单端口同时支持 HTTP 与 SOCKS4/4a/5</string>
+    <string name="inbound_type_http">HTTP 代理</string>
+    <string name="inbound_type_http_desc">标准 HTTP/HTTPS 代理</string>
+    <string name="inbound_type_socks">SOCKS 代理</string>
+    <string name="inbound_type_socks_desc">SOCKS4/4a/5，支持 UDP 转发</string>
+    <string name="inbound_type_pac">PAC 服务</string>
+    <string name="inbound_type_pac_desc">为客户端提供自动代理配置脚本</string>
+    <string name="inbound_edit_title_new">新建入站</string>
+    <string name="inbound_edit_title">编辑入站</string>
+    <string name="inbound_delete_title">删除入站</string>
+    <string name="inbound_delete_message">「%1$s · %2$s」将被删除。正指着这个端口的设备会立刻失去代理，此操作不可撤销。</string>
+    <string name="inbound_type_section">类型</string>
+    <string name="inbound_listen_section">监听地址</string>
+    <string name="inbound_listen_all">所有接口（0.0.0.0）</string>
+    <string name="inbound_listen_all_hint">局域网内的其他设备可以连接</string>
+    <string name="inbound_listen_local">仅本机（127.0.0.1）</string>
+    <string name="inbound_listen_local_hint">只有这台设备上的应用能连接</string>
+    <string name="inbound_port">端口</string>
+    <string name="inbound_port_out_of_range">端口需在 1025–65535 之间</string>
+    <string name="inbound_port_taken">该端口已被其他入站占用</string>
+    <string name="inbound_pac_section">使用方式</string>
+    <string name="inbound_pac_port_placeholder">端口</string>
+    <string name="inbound_pac_hint">在客户端的「自动代理配置」里填入 http://&lt;本机 IP&gt;:%1$s/proxy.pac\n\n脚本会按客户端实际访问的地址动态生成，局域网与本机地址自动绕行。之后改端口或换网络都不必再动客户端。</string>
+    <string name="inbound_enabled">启用</string>
+    <string name="inbound_auth_enabled">启用认证</string>
+    <string name="inbound_username">用户名</string>
+    <string name="inbound_password">密码</string>
+    <string name="inbound_open_warning">监听所有接口且未启用认证时，同一网络下的任何设备都能使用这个代理。</string>
+    <string name="inbound_udp">允许 UDP 转发</string>
 
     <!-- ============================ 导航 ============================ -->
     <string name="nav_home">首页</string>
@@ -415,24 +449,6 @@
     <string name="expert_failed_title">配置生成失败，代理无法启动</string>
     <string name="expert_warnings_title">生成器跳过了这些内容，内核照常启动</string>
     <string name="expert_clipboard_label">sing-box 配置</string>
-
-    <!-- ============================ 入站编辑 ============================ -->
-    <string name="inbound_edit_title">编辑入站</string>
-    <string name="inbound_new_title">新建入站</string>
-    <string name="inbound_type">类型</string>
-    <string name="inbound_listen">监听地址</string>
-    <string name="inbound_listen_all">所有接口（0.0.0.0）</string>
-    <string name="inbound_listen_loopback">仅本机（127.0.0.1）</string>
-    <string name="inbound_port">端口</string>
-    <string name="inbound_port_error">端口需在 1025–65535 之间</string>
-    <string name="inbound_port_taken">该端口已被其他入站占用</string>
-    <string name="inbound_auth_enable">启用用户名密码认证</string>
-    <string name="inbound_username">用户名</string>
-    <string name="inbound_password">密码</string>
-    <string name="inbound_udp">允许 UDP 转发</string>
-    <string name="inbound_enabled">启用</string>
-    <string name="inbound_save">保存</string>
-    <string name="inbound_delete">删除</string>
 
     <string name="permission_notification_rationale">需要通知权限才能显示常驻状态并保持服务在后台运行</string>
 

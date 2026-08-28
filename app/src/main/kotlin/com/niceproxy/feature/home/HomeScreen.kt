@@ -63,6 +63,7 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.niceproxy.R
+import com.niceproxy.feature.inbound.labelRes
 import com.niceproxy.core.designsystem.component.GlassPanel
 import com.niceproxy.core.designsystem.component.GlowCircle
 import com.niceproxy.core.designsystem.component.LocalHazeState
@@ -746,7 +747,8 @@ private fun InboundPanel(
     onToggle: (Boolean) -> Unit,
 ) {
     val hazeState = LocalHazeState.current
-    val toggleLabel = stringResource(R.string.home_inbound_toggle, inbound.type.displayName)
+    val typeLabel = stringResource(inbound.type.labelRes())
+    val toggleLabel = stringResource(R.string.home_inbound_toggle, typeLabel)
     GlassPanel(
         hazeState = hazeState,
         modifier = Modifier.fillMaxWidth(),
@@ -766,7 +768,7 @@ private fun InboundPanel(
             )
             Spacer(Modifier.width(12.dp))
             Column(modifier = Modifier.weight(1f)) {
-                Text(inbound.type.displayName, style = MaterialTheme.typography.titleSmall)
+                Text(typeLabel, style = MaterialTheme.typography.titleSmall)
                 Text(
                     text = "${inbound.listen}:${inbound.listenPort}",
                     style = MaterialTheme.typography.bodySmall,

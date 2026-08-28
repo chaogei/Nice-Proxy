@@ -15,9 +15,7 @@
     <!-- ============================ Common ============================ -->
     <string name="common_back">Back</string>
     <string name="common_cancel">Cancel</string>
-    <string name="common_confirm">OK</string>
     <string name="common_delete">Delete</string>
-    <string name="common_copy">Copy</string>
     <string name="common_share">Share</string>
     <string name="common_close">Close</string>
     <string name="common_retry">Retry</string>
@@ -116,6 +114,38 @@
     <string name="node_edit_name">Name</string>
     <string name="node_edit_server">Server address</string>
     <string name="node_edit_port">Port</string>
+
+    <!-- ============================ Inbounds ============================ -->
+    <string name="inbound_type_mixed">Mixed proxy</string>
+    <string name="inbound_type_mixed_desc">One port serving HTTP and SOCKS4/4a/5 at once</string>
+    <string name="inbound_type_http">HTTP proxy</string>
+    <string name="inbound_type_http_desc">Standard HTTP/HTTPS proxy</string>
+    <string name="inbound_type_socks">SOCKS proxy</string>
+    <string name="inbound_type_socks_desc">SOCKS4/4a/5 with UDP forwarding</string>
+    <string name="inbound_type_pac">PAC service</string>
+    <string name="inbound_type_pac_desc">Serves an auto proxy configuration script to clients</string>
+    <string name="inbound_edit_title_new">New inbound</string>
+    <string name="inbound_edit_title">Edit inbound</string>
+    <string name="inbound_delete_title">Delete inbound</string>
+    <string name="inbound_delete_message">\"%1$s · %2$s\" will be deleted. Devices pointing at this port lose their proxy immediately. This cannot be undone.</string>
+    <string name="inbound_type_section">Type</string>
+    <string name="inbound_listen_section">Listen address</string>
+    <string name="inbound_listen_all">All interfaces (0.0.0.0)</string>
+    <string name="inbound_listen_all_hint">Other devices on the local network can connect</string>
+    <string name="inbound_listen_local">This device only (127.0.0.1)</string>
+    <string name="inbound_listen_local_hint">Only apps on this device can connect</string>
+    <string name="inbound_port">Port</string>
+    <string name="inbound_port_out_of_range">Port must be between 1025 and 65535</string>
+    <string name="inbound_port_taken">Another inbound already uses this port</string>
+    <string name="inbound_pac_section">How to use it</string>
+    <string name="inbound_pac_port_placeholder">port</string>
+    <string name="inbound_pac_hint">In the client\'s automatic proxy configuration field, enter http://&lt;this device\'s IP&gt;:%1$s/proxy.pac\n\nThe script is generated on the fly from the address the client actually requests, and local-network and loopback addresses bypass the proxy automatically. Changing the port or the network later needs no change on the client.</string>
+    <string name="inbound_enabled">Enabled</string>
+    <string name="inbound_auth_enabled">Require authentication</string>
+    <string name="inbound_username">Username</string>
+    <string name="inbound_password">Password</string>
+    <string name="inbound_open_warning">Listening on all interfaces without authentication means any device on the same network can use this proxy.</string>
+    <string name="inbound_udp">Allow UDP forwarding</string>
 
     <!-- ============================ Navigation ============================ -->
     <string name="nav_home">Home</string>
@@ -398,24 +428,6 @@
     <string name="expert_failed_title">Config generation failed — the proxy cannot start</string>
     <string name="expert_warnings_title">The generator skipped these; the core still starts</string>
     <string name="expert_clipboard_label">sing-box config</string>
-
-    <!-- ============================ Inbound editor ============================ -->
-    <string name="inbound_edit_title">Edit inbound</string>
-    <string name="inbound_new_title">New inbound</string>
-    <string name="inbound_type">Type</string>
-    <string name="inbound_listen">Listen address</string>
-    <string name="inbound_listen_all">All interfaces (0.0.0.0)</string>
-    <string name="inbound_listen_loopback">This device only (127.0.0.1)</string>
-    <string name="inbound_port">Port</string>
-    <string name="inbound_port_error">Port must be between 1025 and 65535</string>
-    <string name="inbound_port_taken">Another inbound already uses this port</string>
-    <string name="inbound_auth_enable">Require username and password</string>
-    <string name="inbound_username">Username</string>
-    <string name="inbound_password">Password</string>
-    <string name="inbound_udp">Allow UDP forwarding</string>
-    <string name="inbound_enabled">Enabled</string>
-    <string name="inbound_save">Save</string>
-    <string name="inbound_delete">Delete</string>
 
     <string name="permission_notification_rationale">Notification permission is required to show the persistent status and keep the service alive in the background</string>
 
