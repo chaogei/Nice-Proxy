@@ -59,8 +59,6 @@ import com.niceproxy.core.designsystem.component.LocalHazeState
 import com.niceproxy.core.designsystem.component.SectionTitle
 import com.niceproxy.core.model.RoutingMode
 import com.niceproxy.core.model.RoutingRule
-import com.niceproxy.core.model.RuleAction
-import com.niceproxy.core.model.WellKnownTag
 
 @Composable
 fun RoutingScreen(
@@ -143,7 +141,7 @@ fun RoutingScreen(
                                 viewModel.setMode(mode)
                             }
                         },
-                        label = { Text(mode.displayName) },
+                        label = { Text(stringResource(mode.labelRes())) },
                     )
                 }
             }
@@ -151,7 +149,7 @@ fun RoutingScreen(
 
         item {
             Text(
-                text = state.mode.description,
+                text = stringResource(state.mode.descriptionRes()),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(start = 4.dp),
@@ -216,7 +214,14 @@ fun RoutingScreen(
         val doomed = state.rules.count { !it.locked }
         AlertDialog(
             onDismissRequest = { pendingMode = null },
-            title = { Text(stringResource(R.string.routing_apply_title, mode.displayName)) },
+            title = {
+                Text(
+                    stringResource(
+                        R.string.routing_apply_title,
+                        stringResource(mode.labelRes()),
+                    ),
+                )
+            },
             text = { Text(stringResource(R.string.routing_apply_message, doomed)) },
             confirmButton = {
                 TextButton(onClick = {
@@ -329,7 +334,7 @@ private fun RuleRow(
                     text = stringResource(
                         R.string.routing_rule_summary,
                         rule.matcher.summary(),
-                        rule.action.summary(),
+                        rule.action.label().resolve(),
                     ),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -435,32 +440,4 @@ private fun RuleRow(
             }
         }
     }
-}
-
-/** 把匹配条件压缩成一行可读描述，列表里不需要展示完整细节。 */
-private fun com.niceproxy.core.model.RuleMatcher.summary(): String {
-    val parts = buildList {
-        if (ruleSet.isNotEmpty()) add("规则集 ${ruleSet.joinToString()}")
-        if (domainSuffix.isNotEmpty()) add("域名后缀 ${domainSuffix.take(2).joinToString()}")
-        if (domain.isNotEmpty()) add("域名 ${domain.take(2).joinToString()}")
-        if (domainKeyword.isNotEmpty()) add("关键词 ${domainKeyword.take(2).joinToString()}")
-        if (ipCidr.isNotEmpty()) add("IP ${ipCidr.take(2).joinToString()}")
-        if (sourceIpCidr.isNotEmpty()) add("来源 ${sourceIpCidr.take(2).joinToString()}")
-        if (port.isNotEmpty()) add("端口 ${port.joinToString()}")
-        if (ipIsPrivate == true) add("局域网地址")
-        if (protocol.isNotEmpty()) add("协议 ${protocol.joinToString()}")
-    }
-    return if (parts.isEmpty()) "全部流量" else parts.joinToString("，")
-}
-
-private fun RuleAction.summary(): String = when (this) {
-    is RuleAction.Route -> when (outboundTag) {
-        WellKnownTag.DIRECT -> "直连"
-        WellKnownTag.PROXY -> "代理"
-        else -> outboundTag
-    }
-    is RuleAction.Reject -> "拒绝"
-    RuleAction.HijackDns -> "接管 DNS"
-    is RuleAction.Sniff -> "嗅探"
-    is RuleAction.Resolve -> "解析域名"
 }

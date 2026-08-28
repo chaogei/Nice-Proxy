@@ -22,6 +22,7 @@
     <string name="common_share">分享</string>
     <string name="common_close">关闭</string>
     <string name="common_retry">重试</string>
+    <string name="common_save">保存</string>
 
     <!-- ============================ 导航 ============================ -->
     <string name="nav_home">首页</string>
@@ -174,6 +175,35 @@
     <string name="routing_action_hijack_dns">接管 DNS</string>
     <string name="routing_action_sniff">嗅探</string>
     <string name="routing_action_resolve">解析域名</string>
+    <!--
+      模式名与说明在 core:model 的 RoutingMode 里是写死的中文常量，而 core 不在
+      本次可改范围内。在 app 层按枚举重新映射一遍，让它跟着界面语言走。
+    -->
+    <string name="routing_mode_global_proxy">全局代理</string>
+    <string name="routing_mode_global_proxy_desc">所有流量都走上游节点</string>
+    <string name="routing_mode_bypass_mainland">绕过大陆</string>
+    <string name="routing_mode_bypass_mainland_desc">中国大陆网站与 IP 直连，其余走节点</string>
+    <string name="routing_mode_global_direct">全局直连</string>
+    <string name="routing_mode_global_direct_desc">不使用上游节点，等价于纯中继模式</string>
+    <string name="routing_mode_custom">自定义</string>
+    <string name="routing_mode_custom_desc">使用自定义规则列表</string>
+    <string name="routing_outbound_auto">自动选择</string>
+
+    <!-- 规则编辑 -->
+    <string name="rule_edit_default_name">新规则</string>
+    <string name="rule_edit_title_new">新建规则</string>
+    <string name="rule_edit_title_edit">编辑规则</string>
+    <string name="rule_edit_name">规则名称</string>
+    <string name="rule_edit_match_section">匹配条件</string>
+    <string name="rule_edit_match_hint">每行一项，也可用逗号分隔。多个条件之间是「且」的关系。</string>
+    <string name="rule_edit_domain_suffix">域名后缀</string>
+    <string name="rule_edit_domain_keyword">域名关键词</string>
+    <string name="rule_edit_ip_cidr">目标 IP 段</string>
+    <string name="rule_edit_source_ip">客户端来源 IP</string>
+    <string name="rule_edit_source_ip_hint">网关形态独有：让不同设备走不同出站</string>
+    <string name="rule_edit_action_section">命中后</string>
+    <string name="rule_edit_locked_title">套用模板时保留</string>
+    <string name="rule_edit_locked_hint">切换分流模式会清空未锁定的规则。手写的规则建议锁定，否则一键切模板就没了。</string>
 
     <!-- ============================ 设置 ============================ -->
     <string name="settings_title">设置</string>

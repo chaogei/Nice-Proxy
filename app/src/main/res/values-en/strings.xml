@@ -21,6 +21,7 @@
     <string name="common_share">Share</string>
     <string name="common_close">Close</string>
     <string name="common_retry">Retry</string>
+    <string name="common_save">Save</string>
 
     <!-- ============================ Navigation ============================ -->
     <string name="nav_home">Home</string>
@@ -173,6 +174,31 @@
     <string name="routing_action_hijack_dns">hijack DNS</string>
     <string name="routing_action_sniff">sniff</string>
     <string name="routing_action_resolve">resolve</string>
+    <string name="routing_mode_global_proxy">Global proxy</string>
+    <string name="routing_mode_global_proxy_desc">Everything goes through the upstream node</string>
+    <string name="routing_mode_bypass_mainland">Bypass mainland China</string>
+    <string name="routing_mode_bypass_mainland_desc">Mainland Chinese sites and IPs go direct, everything else through the node</string>
+    <string name="routing_mode_global_direct">Global direct</string>
+    <string name="routing_mode_global_direct_desc">No upstream node, equivalent to a plain relay</string>
+    <string name="routing_mode_custom">Custom</string>
+    <string name="routing_mode_custom_desc">Use the custom rule list</string>
+    <string name="routing_outbound_auto">Auto select</string>
+
+    <!-- Rule editor -->
+    <string name="rule_edit_default_name">New rule</string>
+    <string name="rule_edit_title_new">New rule</string>
+    <string name="rule_edit_title_edit">Edit rule</string>
+    <string name="rule_edit_name">Rule name</string>
+    <string name="rule_edit_match_section">Match conditions</string>
+    <string name="rule_edit_match_hint">One entry per line, or separated by commas. Different conditions are combined with AND.</string>
+    <string name="rule_edit_domain_suffix">Domain suffix</string>
+    <string name="rule_edit_domain_keyword">Domain keyword</string>
+    <string name="rule_edit_ip_cidr">Destination IP range</string>
+    <string name="rule_edit_source_ip">Client source IP</string>
+    <string name="rule_edit_source_ip_hint">Gateway-only: send different devices through different outbounds</string>
+    <string name="rule_edit_action_section">Then</string>
+    <string name="rule_edit_locked_title">Keep when applying a template</string>
+    <string name="rule_edit_locked_hint">Switching routing mode clears every unlocked rule. Lock the ones you wrote by hand, or one tap on a template will take them with it.</string>
 
     <!-- ============================ Settings ============================ -->
     <string name="settings_title">Settings</string>
