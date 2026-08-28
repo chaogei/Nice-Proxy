@@ -377,6 +377,7 @@ class ProxyService : LifecycleService() {
                     }
                 }
             }
+            .catch { cause -> Log.w(TAG, "出站绑定观察中断", cause) }
             .launchIn(lifecycleScope)
     }
 
@@ -577,22 +578,27 @@ class ProxyService : LifecycleService() {
         // 重启后不重新订阅：这个订阅与内核实例无关，重来一遍只是白白多跑一次比对
         if (configWatchJob?.isActive == true) return
         configWatchJob = lifecycleScope.launch {
-            configChanges.changes().collectLatest {
-                // 手写防抖。导入订阅、批量测速会在极短时间内刷出几十次写入，
-                // 每次都重新生成一份完整配置纯属浪费。
-                delay(CONFIG_SETTLE_DELAY_MS)
-                try {
-                    // 先做能就地生效的那几项，再去比对需要重启的那些。顺序有意义：
-                    // 用户改的若只是 keepWifiAwake，这一步做完之后指纹比对会得出
-                    // 「没变化」，于是既生效了、又不会给他一个莫名其妙的过期提示。
-                    syncHostSettings()
-                    refreshOutdatedFlag()
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (t: Throwable) {
-                    Log.w(TAG, "配置指纹比对失败", t)
+            configChanges.changes()
+                // 上游是好几条数据库与 DataStore 的流合并出来的，任何一条出错都会
+                // 让整条链断掉；不接住的话那就是一次崩溃，而它想省下的只是一次
+                // 「配置已变更」的提示
+                .catch { cause -> Log.w(TAG, "配置变更监听中断", cause) }
+                .collectLatest {
+                    // 手写防抖。导入订阅、批量测速会在极短时间内刷出几十次写入，
+                    // 每次都重新生成一份完整配置纯属浪费。
+                    delay(CONFIG_SETTLE_DELAY_MS)
+                    try {
+                        // 先做能就地生效的那几项，再去比对需要重启的那些。顺序有意义：
+                        // 用户改的若只是 keepWifiAwake，这一步做完之后指纹比对会得出
+                        // 「没变化」，于是既生效了、又不会给他一个莫名其妙的过期提示。
+                        syncHostSettings()
+                        refreshOutdatedFlag()
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (t: Throwable) {
+                        Log.w(TAG, "配置指纹比对失败", t)
+                    }
                 }
-            }
         }
     }
 
@@ -650,26 +656,38 @@ class ProxyService : LifecycleService() {
                     continue
                 }
 
-                when (liveness.check()) {
-                    CoreLiveness.Verdict.ALIVE ->
-                        // 稳住足够久才算真的好了，这时才把退避计数清掉
-                        if (failureStreak > 0 && coreUptime() >= MIN_HEALTHY_UPTIME_MS) {
-                            Log.i(TAG, "内核已稳定运行，重置退避计数")
-                            failureStreak = 0
+                // 一次探测出意外不能把整条监督线掐掉。这个循环是秒级自愈那一层的
+                // 全部，它死了之后代理照常显示运行中、而内核崩了再也没人管，只剩
+                // 15 分钟一轮的看门狗那张粗网 —— 而且没有任何迹象说明降级发生过。
+                try {
+                    when (liveness.check()) {
+                        CoreLiveness.Verdict.ALIVE ->
+                            // 稳住足够久才算真的好了，这时才把退避计数清掉
+                            if (failureStreak > 0 && coreUptime() >= MIN_HEALTHY_UPTIME_MS) {
+                                Log.i(TAG, "内核已稳定运行，重置退避计数")
+                                failureStreak = 0
+                            }
+
+                        CoreLiveness.Verdict.WATCHING ->
+                            Log.i(
+                                TAG,
+                                "内核存活探测第 ${liveness.consecutiveMisses} 次失败，再观察一轮",
+                            )
+
+                        CoreLiveness.Verdict.DEAD -> {
+                            Log.w(TAG, "内核已连续 $HEALTH_MISSES_BEFORE_REVIVE 次不响应，尝试拉起")
+                            runApply("内核自愈") { reviveCore() }
                         }
-
-                    CoreLiveness.Verdict.WATCHING ->
-                        Log.i(TAG, "内核存活探测第 ${liveness.consecutiveMisses} 次失败，再观察一轮")
-
-                    CoreLiveness.Verdict.DEAD -> {
-                        Log.w(TAG, "内核已连续 $HEALTH_MISSES_BEFORE_REVIVE 次不响应，尝试拉起")
-                        runApply("内核自愈") { reviveCore() }
                     }
-                }
 
-                if (++checksSinceMetrics >= METRICS_LOG_EVERY_N_CHECKS) {
-                    checksSinceMetrics = 0
-                    logRuntimeMetrics()
+                    if (++checksSinceMetrics >= METRICS_LOG_EVERY_N_CHECKS) {
+                        checksSinceMetrics = 0
+                        logRuntimeMetrics()
+                    }
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (t: Throwable) {
+                    Log.w(TAG, "内核存活探测出错，下一轮继续", t)
                 }
             }
         }
@@ -731,10 +749,6 @@ class ProxyService : LifecycleService() {
         var current: Network? = null
         var isFirstCallback = true
         networkJob = networkBinder.defaultNetworkChanges()
-            // 注册默认网络回调会抛（部分 ROM 裁剪权限时是 SecurityException），
-            // 而这条流用 launchIn 收集 —— 漏出去就是一次服务崩溃，也就是全屋断网。
-            // 接住之后代理照常跑，只是失去切网自愈，那比整个死掉好得多。
-            .catch { cause -> Log.w(TAG, "默认网络监听不可用，切网自愈已停用", cause) }
             .onEach { network ->
                 // 监听地址会随网络变化，通知里的端口信息与首页都要刷新
                 refreshNotification()
@@ -758,6 +772,11 @@ class ProxyService : LifecycleService() {
                 current = network
                 scheduleNetworkRecovery()
             }
+            // catch 放在 onEach **之后**：这样它既接得住上游（部分 ROM 裁剪权限时
+            // registerDefaultNetworkCallback 抛 SecurityException），也接得住处理过程
+            // 本身。这条流用 launchIn 收集，任何一处漏出去都是一次服务崩溃，也就是
+            // 全屋断网 —— 而失去切网自愈只是失去一层自愈，两者不在一个量级。
+            .catch { cause -> Log.w(TAG, "默认网络监听中断，切网自愈已停用", cause) }
             .launchIn(lifecycleScope)
     }
 
@@ -899,7 +918,13 @@ class ProxyService : LifecycleService() {
     private fun observeTraffic() {
         trafficJob?.cancel()
         trafficJob = lifecycleScope.launch {
-            val api = settings.clashApiSettings()
+            // 读不到 Clash API 配置就只是没有速率显示。这一句抛出去的话，
+            // lifecycleScope 的默认处理是让整个进程崩掉 —— 为一块界面上的数字，
+            // 代价是全屋断网。
+            val api = runCatching { settings.clashApiSettings() }.getOrElse {
+                Log.w(TAG, "读取 Clash API 配置失败，流量统计未启用", it)
+                return@launch
+            }
             // 内核重启会把自己的计数器清零，但对用户来说这仍是同一次会话，
             // 累计流量不该跟着归零。
             var totalUp = controller.traffic.value.totalUploadBytes
