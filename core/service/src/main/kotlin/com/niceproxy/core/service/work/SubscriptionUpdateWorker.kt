@@ -35,15 +35,24 @@ class SubscriptionUpdateWorker @AssistedInject constructor(
     private val subscriptionRepository: SubscriptionRepository,
 ) : CoroutineWorker(context, params) {
 
+    /**
+     * 一次醒来把所有到点的订阅一起交出去，而不是逐条 refresh。
+     *
+     * 差别不只是快慢。WorkManager 给每次执行的时间是有限的（超时会被判为失败并
+     * 重排），而串行更新的耗时是所有订阅往返时间之和 —— 订阅一多，这个任务就从
+     * 「偶尔慢一点」变成「永远做不完」，而现象是订阅再也不自动更新了。批量交出去
+     * 之后并发度由 `SubscriptionFetcher` 统一压住，见 `SubscriptionRepository.refresh`。
+     */
     override suspend fun doWork(): Result {
         val due = serverRepository.getGroups().filter { it.isDue() }
         if (due.isEmpty()) return Result.success()
 
+        val results = subscriptionRepository.refresh(due.map { it.id })
         var failed = 0
-        due.forEach { group ->
-            subscriptionRepository.refresh(group.id).onFailure {
+        results.forEachIndexed { index, result ->
+            result.onFailure {
                 failed++
-                Log.w(TAG, "订阅「${group.name}」更新失败", it)
+                Log.w(TAG, "订阅「${due[index].name}」更新失败", it)
             }
         }
 

@@ -36,6 +36,8 @@ dependencies {
     // DAO 用手写 fake 实现来测，不引 Robolectric；但 fake 要实现 Room 注解过的
     // 接口，注解本身在 :core:database 里是 implementation 依赖，编译期看不到
     testImplementation(libs.androidx.room.runtime)
+    // 订阅更新的批量路径要证明「多条同时在飞」，那件事只在真实 socket 上看得见
+    testImplementation(libs.okhttp.mockwebserver)
 }
 
 tasks.withType<Test>().configureEach {
