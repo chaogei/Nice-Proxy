@@ -20,6 +20,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.niceproxy.core.designsystem.theme.NiceTheme
@@ -51,14 +52,7 @@ fun GlassPanel(
     // 面板在长列表里成批出现，而这两个对象只跟主题走。不 remember 的话，
     // 每块面板的每次重组都要新建一支渐变画笔和一条描边。
     val panelTints = remember(glass.panelTint) { listOf(HazeTint(glass.panelTint)) }
-    val panelBorder = remember(glass.panelBorder) {
-        BorderStroke(
-            width = 1.dp,
-            brush = Brush.verticalGradient(
-                listOf(glass.panelBorder, glass.panelBorder.copy(alpha = 0.15f)),
-            ),
-        )
-    }
+    val panelBorder = rememberPanelBorder(glass.panelBorder)
     Column(
         modifier = modifier
             .clip(shape)
@@ -72,6 +66,46 @@ fun GlassPanel(
             .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
             .padding(contentPadding),
         content = content,
+    )
+}
+
+/**
+ * 和 [GlassPanel] 长得一样、但不做背景模糊的面板。
+ *
+ * 每个 [GlassPanel] 都会往 Haze 里注册一个模糊节点，代价是每帧一次 RenderEffect。
+ * 一屏十几行还撑得住，可订阅节点动辄几百条，而且批量测延迟时每秒都在刷新整张列表 ——
+ * 那时模糊掉的那点背景没人看，掉的帧倒是人人都看得见。
+ *
+ * 用的正是 Haze 在 API 31 以下的降级配色，所以老设备上两者本来就是同一个样子。
+ */
+@Composable
+fun FlatPanel(
+    modifier: Modifier = Modifier,
+    shape: Shape = PanelShape,
+    onClick: (() -> Unit)? = null,
+    contentPadding: Dp = 0.dp,
+    content: @Composable ColumnScope.() -> Unit,
+) {
+    val glass = NiceTheme.glass
+    val surface = MaterialTheme.colorScheme.surface
+    val fill = remember(glass.panelTint, surface) { glass.panelTint.compositeOver(surface) }
+    val panelBorder = rememberPanelBorder(glass.panelBorder)
+    Column(
+        modifier = modifier
+            .clip(shape)
+            .background(fill)
+            .border(border = panelBorder, shape = shape)
+            .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
+            .padding(contentPadding),
+        content = content,
+    )
+}
+
+@Composable
+private fun rememberPanelBorder(color: Color): BorderStroke = remember(color) {
+    BorderStroke(
+        width = 1.dp,
+        brush = Brush.verticalGradient(listOf(color, color.copy(alpha = 0.15f))),
     )
 }
 
