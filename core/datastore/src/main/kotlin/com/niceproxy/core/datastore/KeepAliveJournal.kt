@@ -1,6 +1,7 @@
 package com.niceproxy.core.datastore
 
 import androidx.datastore.core.DataStore
+import androidx.datastore.preferences.core.MutablePreferences
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.emptyPreferences
@@ -80,8 +81,14 @@ class KeepAliveJournal @Inject constructor(
         edit { it.remove(Keys.INTERRUPTIONS) }
     }
 
-    /** 写失败同样只能吞掉：记账失败不该让代理启动失败。 */
-    private suspend fun edit(block: (androidx.datastore.preferences.core.MutablePreferences) -> Unit) {
+    /**
+     * 写失败同样只能吞掉：记账失败不该让代理启动失败。
+     *
+     * `block` 必须声明成 suspend：`DataStore.edit` 要的是 `suspend (MutablePreferences) -> Unit`，
+     * 而普通函数类型不是它的子类型。lambda **字面量**会被隐式转换，所以调用方看不出区别，
+     * 但把一个已有的函数**值**转手传下去就是类型不匹配。
+     */
+    private suspend fun edit(block: suspend (MutablePreferences) -> Unit) {
         runCatching { dataStore.edit(block) }
     }
 

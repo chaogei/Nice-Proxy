@@ -112,13 +112,32 @@ jobs:
       # ------------------------------------------------------------------ 校验
 
       - name: 单元测试
+        id: tests
         # chmod 是兜底：仓库在 Windows 上开发，那里 core.filemode 默认为 false，
         # git 不跟踪执行位。虽然索引里已经把 gradlew 标成 100755，
         # 但只要有人在 Windows 上重新添加过这个文件就会丢掉，
         # 而症状是这一步 0 秒失败、日志里只有一句 Permission denied。
         run: |
           chmod +x gradlew
-          ./gradlew test --no-daemon --stacktrace
+          # 留一份日志：失败细节要从这里提取成 annotation，见下一步
+          set -o pipefail
+          ./gradlew test --no-daemon --stacktrace 2>&1 | tee "$RUNNER_TEMP/build.log"
+
+      - name: 提取失败细节
+        if: failure() && steps.tests.conclusion == 'failure'
+        # 完整日志需要仓库管理员权限才能通过 API 拉取，而 annotation 是公开可读的。
+        # 没有这一步，一次失败在外部看来只有「Process completed with exit code 1」，
+        # 排查只能靠猜，而猜错一次就是多等一整轮 CI。
+        run: python3 scripts/report-build-failure.py "$RUNNER_TEMP/build.log"
+
+      - name: 上传测试报告
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-reports-${{ steps.version.outputs.name }}
+          path: '**/build/reports/tests/'
+          retention-days: 7
+          if-no-files-found: ignore
 
       # -------------------------------------------------------------- 构建与签名
 
