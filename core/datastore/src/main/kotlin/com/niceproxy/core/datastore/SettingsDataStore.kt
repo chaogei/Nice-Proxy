@@ -57,7 +57,7 @@ class SettingsDataStore @Inject constructor(
      *
      * 只有用户显式停止、省电模式停机、以及开机时未启用自启这三种情况会置 false。
      */
-    val shouldBeRunning: Flow<Boolean> = preferences.map { it[Keys.SHOULD_BE_RUNNING] ?: false }
+    val shouldBeRunning: Flow<Boolean> = preferences.map { it.stored(Keys.SHOULD_BE_RUNNING) ?: false }
 
     suspend fun setShouldBeRunning(value: Boolean) {
         dataStore.edit { it[Keys.SHOULD_BE_RUNNING] = value }
@@ -65,26 +65,12 @@ class SettingsDataStore @Inject constructor(
 
     val dnsSettings: Flow<DnsSettings> = preferences.map { readDnsSettings(it) }
 
-    val logSettings: Flow<LogSettings> = preferences.map { prefs ->
-        LogSettings(
-            level = prefs[Keys.LOG_LEVEL]
-                ?.let { runCatching { LogLevel.valueOf(it) }.getOrNull() }
-                ?: LogLevel.INFO,
-        )
-    }
+    val logSettings: Flow<LogSettings> = preferences.map { readLogSettings(it) }
 
-    val outboundSettings: Flow<OutboundSettings> = preferences.map { prefs ->
-        val default = OutboundSettings()
-        OutboundSettings(
-            selectedTag = prefs[Keys.SELECTED_OUTBOUND] ?: default.selectedTag,
-            urlTestUrl = prefs[Keys.URLTEST_URL] ?: default.urlTestUrl,
-            urlTestInterval = prefs[Keys.URLTEST_INTERVAL] ?: default.urlTestInterval,
-            urlTestTolerance = prefs[Keys.URLTEST_TOLERANCE] ?: default.urlTestTolerance,
-        )
-    }
+    val outboundSettings: Flow<OutboundSettings> = preferences.map { readOutboundSettings(it) }
 
     val routingMode: Flow<RoutingMode> = preferences.map { prefs ->
-        prefs[Keys.ROUTING_MODE]
+        prefs.stored(Keys.ROUTING_MODE)
             ?.let { runCatching { RoutingMode.valueOf(it) }.getOrNull() }
             ?: RoutingMode.BYPASS_MAINLAND
     }
@@ -115,6 +101,31 @@ class SettingsDataStore @Inject constructor(
             prefs[Keys.DNS_REMOTE] = updated.remoteServer
             prefs[Keys.DNS_LOCAL] = updated.localServer
             prefs[Keys.DNS_STRATEGY] = updated.strategy
+            prefs[Keys.DNS_SPLIT_BY_RULE_SET] = updated.splitByRuleSet
+            prefs[Keys.DNS_DISABLE_CACHE] = updated.disableCache
+        }
+    }
+
+    /** 同 [updateDnsSettings]，变换在事务内进行。 */
+    suspend fun updateLogSettings(transform: (LogSettings) -> LogSettings) {
+        dataStore.edit { prefs ->
+            val updated = transform(readLogSettings(prefs))
+            prefs[Keys.LOG_LEVEL] = updated.level.name
+            prefs[Keys.LOG_TIMESTAMP] = updated.timestamp
+            prefs[Keys.LOG_PERSIST] = updated.persist
+            prefs[Keys.LOG_MAX_BUFFERED_LINES] = updated.maxBufferedLines
+        }
+    }
+
+    /** 同 [updateDnsSettings]，变换在事务内进行。 */
+    suspend fun updateOutboundSettings(transform: (OutboundSettings) -> OutboundSettings) {
+        dataStore.edit { prefs ->
+            val updated = transform(readOutboundSettings(prefs))
+            prefs[Keys.SELECTED_OUTBOUND] = updated.selectedTag
+            prefs[Keys.URLTEST_URL] = updated.urlTestUrl
+            prefs[Keys.URLTEST_INTERVAL] = updated.urlTestInterval
+            prefs[Keys.URLTEST_TOLERANCE] = updated.urlTestTolerance
+            prefs[Keys.OUTBOUND_INTERRUPT_EXIST] = updated.interruptExistConnections
         }
     }
 
@@ -134,23 +145,60 @@ class SettingsDataStore @Inject constructor(
     }
 
     private fun readServiceSettings(prefs: Preferences) = ServiceSettings(
-        autoStartOnBoot = prefs[Keys.AUTO_START_ON_BOOT] ?: false,
-        startOnAppLaunch = prefs[Keys.START_ON_LAUNCH] ?: false,
-        powerSave = prefs[Keys.POWER_SAVE] ?: false,
-        keepWifiAwake = prefs[Keys.KEEP_WIFI_AWAKE] ?: true,
-        networkPreference = prefs[Keys.NETWORK_PREFERENCE]
+        autoStartOnBoot = prefs.stored(Keys.AUTO_START_ON_BOOT) ?: false,
+        startOnAppLaunch = prefs.stored(Keys.START_ON_LAUNCH) ?: false,
+        powerSave = prefs.stored(Keys.POWER_SAVE) ?: false,
+        keepWifiAwake = prefs.stored(Keys.KEEP_WIFI_AWAKE) ?: true,
+        networkPreference = prefs.stored(Keys.NETWORK_PREFERENCE)
             ?.let { runCatching { NetworkPreference.valueOf(it) }.getOrNull() }
             ?: NetworkPreference.AUTO,
-        ipv6Enabled = prefs[Keys.IPV6_ENABLED] ?: true,
-        autoRestartOnFailure = prefs[Keys.AUTO_RESTART] ?: true,
-        pacDirectFallback = prefs[Keys.PAC_DIRECT_FALLBACK] ?: false,
+        ipv6Enabled = prefs.stored(Keys.IPV6_ENABLED) ?: true,
+        autoRestartOnFailure = prefs.stored(Keys.AUTO_RESTART) ?: true,
+        pacDirectFallback = prefs.stored(Keys.PAC_DIRECT_FALLBACK) ?: false,
     )
 
-    private fun readDnsSettings(prefs: Preferences) = DnsSettings(
-        remoteServer = prefs[Keys.DNS_REMOTE] ?: DnsSettings().remoteServer,
-        localServer = prefs[Keys.DNS_LOCAL] ?: DnsSettings().localServer,
-        strategy = prefs[Keys.DNS_STRATEGY] ?: DnsSettings().strategy,
-    )
+    private fun readDnsSettings(prefs: Preferences): DnsSettings {
+        val default = DnsSettings()
+        return DnsSettings(
+            remoteServer = prefs.stored(Keys.DNS_REMOTE) ?: default.remoteServer,
+            localServer = prefs.stored(Keys.DNS_LOCAL) ?: default.localServer,
+            // strategy 是自由字符串而不是枚举，读回来一个 sing-box 不认识的值
+            // 会让**整份配置**被内核拒绝，代理直接起不来。它落盘的路径不止用户
+            // 一条（备份恢复、旧版本残留、文件被外部改写），所以在读这一侧兜住。
+            strategy = prefs.stored(Keys.DNS_STRATEGY)?.takeIf { it in DnsSettings.STRATEGIES }
+                ?: default.strategy,
+            splitByRuleSet = prefs.stored(Keys.DNS_SPLIT_BY_RULE_SET) ?: default.splitByRuleSet,
+            disableCache = prefs.stored(Keys.DNS_DISABLE_CACHE) ?: default.disableCache,
+        )
+    }
+
+    private fun readLogSettings(prefs: Preferences): LogSettings {
+        val default = LogSettings()
+        return LogSettings(
+            level = prefs.stored(Keys.LOG_LEVEL)
+                ?.let { runCatching { LogLevel.valueOf(it) }.getOrNull() }
+                ?: default.level,
+            timestamp = prefs.stored(Keys.LOG_TIMESTAMP) ?: default.timestamp,
+            persist = prefs.stored(Keys.LOG_PERSIST) ?: default.persist,
+            // 0 或负数会让日志缓冲区一行都留不住，界面上就是「日志页永远空白」，
+            // 而用户根本不会把它和某个数字联系起来
+            maxBufferedLines = prefs.stored(Keys.LOG_MAX_BUFFERED_LINES)?.takeIf { it > 0 }
+                ?: default.maxBufferedLines,
+        )
+    }
+
+    private fun readOutboundSettings(prefs: Preferences): OutboundSettings {
+        val default = OutboundSettings()
+        return OutboundSettings(
+            selectedTag = prefs.stored(Keys.SELECTED_OUTBOUND) ?: default.selectedTag,
+            urlTestUrl = prefs.stored(Keys.URLTEST_URL) ?: default.urlTestUrl,
+            urlTestInterval = prefs.stored(Keys.URLTEST_INTERVAL) ?: default.urlTestInterval,
+            urlTestTolerance = prefs.stored(Keys.URLTEST_TOLERANCE)?.takeIf { it >= 0 }
+                ?: default.urlTestTolerance,
+            interruptExistConnections = prefs.stored(Keys.OUTBOUND_INTERRUPT_EXIST)
+                ?: default.interruptExistConnections,
+        )
+    }
 
     suspend fun setLogLevel(level: LogLevel) {
         dataStore.edit { it[Keys.LOG_LEVEL] = level.name }
@@ -177,9 +225,9 @@ class SettingsDataStore @Inject constructor(
         // 去调 Clash API，只会得到 401。服务启动与监控页同时初始化就会撞上。
         val updated = dataStore.edit { prefs ->
             val random = SecureRandom()
-            prefs[Keys.CLASH_API_PORT] = prefs[Keys.CLASH_API_PORT]
+            prefs[Keys.CLASH_API_PORT] = validPort(prefs.stored(Keys.CLASH_API_PORT))
                 ?: (RANDOM_PORT_BASE + random.nextInt(RANDOM_PORT_RANGE))
-            prefs[Keys.CLASH_API_SECRET] = validSecret(prefs[Keys.CLASH_API_SECRET])
+            prefs[Keys.CLASH_API_SECRET] = validSecret(prefs.stored(Keys.CLASH_API_SECRET))
                 ?: ByteArray(SECRET_BYTES)
                     .also(random::nextBytes)
                     .joinToString("") { "%02x".format(it) }
@@ -188,8 +236,8 @@ class SettingsDataStore @Inject constructor(
     }
 
     private fun readClashApiSettings(prefs: Preferences): ClashApiSettings? {
-        val port = prefs[Keys.CLASH_API_PORT] ?: return null
-        val secret = validSecret(prefs[Keys.CLASH_API_SECRET]) ?: return null
+        val port = validPort(prefs.stored(Keys.CLASH_API_PORT)) ?: return null
+        val secret = validSecret(prefs.stored(Keys.CLASH_API_SECRET)) ?: return null
         return ClashApiSettings(port, secret)
     }
 
@@ -198,6 +246,34 @@ class SettingsDataStore @Inject constructor(
      * 都能操控内核。宁可当成没生成过重新生成，也不能把它当有效值用。
      */
     private fun validSecret(value: String?): String? = value?.takeIf { it.isNotBlank() }
+
+    /**
+     * 端口同样要当成可能被污染的值来读。
+     *
+     * 它会原样拼进 `external_controller`，而 sing-box 拒绝一个非法的
+     * `external_controller` 的方式是**拒绝整份配置** —— 表现出来就是代理
+     * 起不来，而报错指向的是一个用户从来没设置过、界面上也看不到的端口。
+     * 判定为非法就当作没生成过，重新随机一个。
+     */
+    private fun validPort(value: Int?): Int? = value?.takeIf { it in 1..MAX_PORT }
+
+    /**
+     * 读取时按名字**和类型**取值，类型不符当作没有这个键。
+     *
+     * `Preferences` 的键相等只看名字，取值那一步是一个未经检查的强制转换。
+     * 于是一个「名字对、类型不对」的条目会在读取处抛 `ClassCastException`——
+     * 而上面那个 `catch` 只接 `IOException`，接不住它。后果是 `dnsSettings`
+     * 这类流整条炸掉：设置页崩，`ConfigRepository` 生成不出配置，代理起不来。
+     *
+     * 这种条目不是假想的：某个键换过类型（`urltest_interval` 从秒数改成
+     * `"3m"` 这种字符串就是一次），旧版本写的值就还躺在文件里；恢复一份来自
+     * 不同版本的备份也一样。而 `corruptionHandler` 帮不上忙 —— 文件本身是
+     * 完好的 protobuf，解析得出来，只是里面某个值的类型不是这一版期待的。
+     *
+     * 当作缺省处理，让那一个字段退回默认值，而不是让整组设置陪葬。
+     */
+    private inline fun <reified T : Any> Preferences.stored(key: Preferences.Key<T>): T? =
+        asMap()[key] as? T
 
     private object Keys {
         val AUTO_START_ON_BOOT = booleanPreferencesKey("auto_start_on_boot")
@@ -215,13 +291,19 @@ class SettingsDataStore @Inject constructor(
         val DNS_REMOTE = stringPreferencesKey("dns_remote")
         val DNS_LOCAL = stringPreferencesKey("dns_local")
         val DNS_STRATEGY = stringPreferencesKey("dns_strategy")
+        val DNS_SPLIT_BY_RULE_SET = booleanPreferencesKey("dns_split_by_rule_set")
+        val DNS_DISABLE_CACHE = booleanPreferencesKey("dns_disable_cache")
 
         val LOG_LEVEL = stringPreferencesKey("log_level")
+        val LOG_TIMESTAMP = booleanPreferencesKey("log_timestamp")
+        val LOG_PERSIST = booleanPreferencesKey("log_persist")
+        val LOG_MAX_BUFFERED_LINES = intPreferencesKey("log_max_buffered_lines")
 
         val SELECTED_OUTBOUND = stringPreferencesKey("selected_outbound")
         val URLTEST_URL = stringPreferencesKey("urltest_url")
         val URLTEST_INTERVAL = stringPreferencesKey("urltest_interval")
         val URLTEST_TOLERANCE = intPreferencesKey("urltest_tolerance")
+        val OUTBOUND_INTERRUPT_EXIST = booleanPreferencesKey("outbound_interrupt_exist_connections")
         val ROUTING_MODE = stringPreferencesKey("routing_mode")
 
         val CLASH_API_PORT = intPreferencesKey("clash_api_port")
@@ -231,6 +313,7 @@ class SettingsDataStore @Inject constructor(
     private companion object {
         const val RANDOM_PORT_BASE = 19000
         const val RANDOM_PORT_RANGE = 900
+        const val MAX_PORT = 65535
 
         /** 192 位。远超暴力猜测所需，而这个值只在本机传递，长一点不花什么代价。 */
         const val SECRET_BYTES = 24
