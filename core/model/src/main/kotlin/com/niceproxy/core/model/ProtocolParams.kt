@@ -94,13 +94,27 @@ sealed interface ProtocolParams {
         val password: String,
     ) : ProtocolParams
 
+    /**
+     * Hysteria v1。
+     *
+     * 带宽是**必填**的：v1 没有 BBR 自适应，`hysteria.NewClient` 拿到 0 会直接
+     * 报错，而报错的后果是内核拒绝整份配置。两种写法二选一即可 ——
+     * [up] / [down] 是带单位的字符串（`100 Mbps`），[upMbps] / [downMbps] 是纯数字。
+     */
     @Serializable
     @SerialName("hysteria")
     data class Hysteria(
         val authString: String? = null,
+        /** Base64 形式的认证串，对应 sing-box 的 `auth`。与 [authString] 二选一。 */
+        val authBase64: String? = null,
         val up: String? = null,
         val down: String? = null,
+        val upMbps: Int? = null,
+        val downMbps: Int? = null,
         val obfs: String? = null,
+        /** 端口跳跃，1.12+ 起 v1 也支持，形如 ["20000:30000"]。 */
+        val serverPorts: List<String> = emptyList(),
+        val hopInterval: String? = null,
         val recvWindowConn: Long? = null,
         val recvWindow: Long? = null,
         val disableMtuDiscovery: Boolean = false,
@@ -121,7 +135,12 @@ sealed interface ProtocolParams {
         /** 端口跳跃间隔，形如 "30s"。 */
         val hopInterval: String? = null,
         val brutalDebug: Boolean = false,
-    ) : ProtocolParams
+    ) : ProtocolParams {
+        companion object {
+            /** sing-box 1.13 的 `obfs.type` 只认这一个值，gecko 要到 1.14。 */
+            val OBFS_TYPES = listOf("salamander")
+        }
+    }
 
     @Serializable
     @SerialName("tuic")
@@ -132,10 +151,21 @@ sealed interface ProtocolParams {
         val congestionControl: String = "cubic",
         /** "native" | "quic" */
         val udpRelayMode: String = "native",
+        /**
+         * 把 UDP 全部塞进一条 QUIC 流。
+         *
+         * 与 [udpRelayMode] 互斥：sing-box 见到两者同时出现会直接报
+         * `udp_over_stream is conflict with udp_relay_mode`。
+         */
         val udpOverStream: Boolean = false,
         val zeroRttHandshake: Boolean = false,
         val heartbeat: String? = null,
-    ) : ProtocolParams
+    ) : ProtocolParams {
+        companion object {
+            val CONGESTION_CONTROLS = listOf("cubic", "new_reno", "bbr")
+            val UDP_RELAY_MODES = listOf("native", "quic")
+        }
+    }
 
     @Serializable
     @SerialName("anytls")
@@ -151,7 +181,12 @@ sealed interface ProtocolParams {
     data class ShadowTls(
         val version: Int = 3,
         val password: String? = null,
-    ) : ProtocolParams
+    ) : ProtocolParams {
+        companion object {
+            /** sing-box 只实现了 v1 / v2 / v3，别的值会让握手函数为空。 */
+            val VERSIONS = listOf(1, 2, 3)
+        }
+    }
 
     @Serializable
     @SerialName("ssh")
@@ -160,6 +195,54 @@ sealed interface ProtocolParams {
         val password: String? = null,
         val privateKey: String? = null,
         val privateKeyPassphrase: String? = null,
+        /** 固定的服务端主机公钥（authorized_keys 行格式），留空表示不校验。 */
+        val hostKey: List<String> = emptyList(),
         val hostKeyAlgorithms: List<String> = emptyList(),
+        /** 伪装成特定 SSH 客户端，形如 "SSH-2.0-OpenSSH_9.6"。 */
+        val clientVersion: String? = null,
     ) : ProtocolParams
+
+    /**
+     * WireGuard。
+     *
+     * 字段名沿用生态里通用的 outbound 叫法（[localAddress]、[peerPublicKey]），
+     * 而不是 sing-box 1.13 endpoint 的 `address` / `peers[].public_key`：
+     * 分享链接、Clash YAML、WARP 配置导出用的全是前者，模型层贴着数据来源命名，
+     * 由配置生成器负责翻译成 endpoint 形态。
+     */
+    @Serializable
+    @SerialName("wireguard")
+    data class WireGuard(
+        /** 本端私钥，标准 Base64 编码的 32 字节。 */
+        val privateKey: String,
+        /** 对端公钥，标准 Base64 编码的 32 字节。 */
+        val peerPublicKey: String,
+        /** 可选的对称预共享密钥，同样是 32 字节 Base64。 */
+        val preSharedKey: String? = null,
+        /**
+         * 分配给本地 WireGuard 接口的地址，**必须**是 CIDR 形式（`10.0.0.2/32`）。
+         *
+         * sing-box 用 `netip.ParsePrefix` 解析，少了掩码位就整份配置解析失败。
+         */
+        val localAddress: List<String> = emptyList(),
+        /** 经该 peer 转发的目标网段，留空时生成器按全量路由处理。 */
+        val allowedIps: List<String> = emptyList(),
+        /** Cloudflare WARP 等实现要求的 3 字节 reserved。 */
+        val reserved: List<Int> = emptyList(),
+        val mtu: Int? = null,
+        /** 单位秒，用于打洞保活。 */
+        val persistentKeepaliveInterval: Int? = null,
+        /** 本地 UDP 监听端口，通常不需要指定。 */
+        val listenPort: Int? = null,
+    ) : ProtocolParams {
+        companion object {
+            /** WireGuard 密钥恒为 32 字节，Base64 之后固定 44 字符（含一个填充符）。 */
+            const val KEY_BASE64_LENGTH = 44
+
+            /** [allowedIps] 留空时的默认值：全部流量都交给这条隧道。 */
+            val DEFAULT_ALLOWED_IPS = listOf("0.0.0.0/0", "::/0")
+
+            const val RESERVED_SIZE = 3
+        }
+    }
 }

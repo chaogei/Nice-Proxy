@@ -1,8 +1,11 @@
 package com.niceproxy.core.config
 
+import com.niceproxy.core.config.internal.DetourResolver
 import com.niceproxy.core.config.internal.DnsServerParser
 import com.niceproxy.core.config.internal.OutboundFactory
 import com.niceproxy.core.config.internal.OutboundResult
+import com.niceproxy.core.config.internal.SingBoxFormats
+import com.niceproxy.core.config.internal.SingBoxSelfCheck
 import com.niceproxy.core.config.internal.putIfNotBlank
 import com.niceproxy.core.config.internal.putIfNotEmpty
 import com.niceproxy.core.config.internal.putIfNotNull
@@ -14,6 +17,7 @@ import com.niceproxy.core.model.RuleAction
 import com.niceproxy.core.model.RuleMatcher
 import com.niceproxy.core.model.RuleSetRef
 import com.niceproxy.core.model.RuleSetType
+import com.niceproxy.core.model.ServerProfile
 import com.niceproxy.core.model.WellKnownTag
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
@@ -40,14 +44,14 @@ class SingBoxConfigBuilder(
 ) {
 
     fun build(input: ConfigInput): ConfigResult {
+        val warnings = mutableListOf<ConfigError>()
         validate(input)
             .takeIf { it.isNotEmpty() }
             ?.let { return ConfigResult.Failure(it) }
 
-        val warnings = mutableListOf<ConfigError>()
         val nodes = buildNodeOutbounds(input, warnings)
         if (nodes.isEmpty() && input.nodes.isNotEmpty()) {
-            return ConfigResult.Failure(noUsableNodeErrors(input, warnings))
+            return ConfigResult.Failure(noUsableNodeErrors(input, warnings), warnings)
         }
         // 走到这里只剩两种局面：有可用节点，或者用户一个节点都没配（纯中继）。
         val hasProxy = nodes.isNotEmpty()
@@ -63,14 +67,30 @@ class SingBoxConfigBuilder(
             warnings = warnings,
         )
 
+        val endpoints = nodes.filter { it.isEndpoint }
         val root = buildJsonObject {
             put("log", buildLog(input))
             put("dns", buildDns(input, ruleSets, hasProxy))
+            // 1.13 的 WireGuard 是 endpoint 而不是 outbound；数组为空时不能写出来，
+            // 空 `endpoints` 本身合法但没有意义，留着只会让 diff 变吵
+            if (endpoints.isNotEmpty()) {
+                put("endpoints", buildJsonArray { endpoints.forEach { add(it.json) } })
+            }
             put("inbounds", buildInbounds(input))
             put("outbounds", buildOutbounds(input, nodes))
             put("route", buildRoute(input, rules, ruleSets, hasProxy))
             put("experimental", buildExperimental(input))
         }
+
+        // 只读自检：抓的是生成器自己漂移出来的结构性问题，见 SingBoxSelfCheck
+        SingBoxSelfCheck.verify(root)
+            .takeIf { it.isNotEmpty() }
+            ?.let { problems ->
+                return ConfigResult.Failure(
+                    problems.map { ConfigError.SelfCheckFailed(it) },
+                    warnings,
+                )
+            }
 
         val text = json.encodeToString(JsonObject.serializer(), root)
         return ConfigResult.Success(
@@ -117,6 +137,15 @@ class SingBoxConfigBuilder(
                 }
                 !seen.add(ref.tag) -> {
                     warnings += ConfigError.InvalidRuleSet(ref.tag, "标签重复")
+                    null
+                }
+                // update_interval 是 badoption.Duration，写错的话内核在读配置的
+                // 第一步就失败 —— 跟规则集本身能不能下载完全无关
+                ref.type == RuleSetType.REMOTE && !SingBoxFormats.isDuration(ref.updateInterval) -> {
+                    warnings += ConfigError.InvalidRuleSet(
+                        ref.tag,
+                        "更新间隔「${ref.updateInterval}」不是合法时长",
+                    )
                     null
                 }
                 else -> ref
@@ -222,11 +251,23 @@ class SingBoxConfigBuilder(
             .keys
             .forEach { errors += ConfigError.DuplicatePort(it) }
 
+        // 端口查重挡不住这个：两个入站可以 tag 相同而端口不同，
+        // 而 `checkInbounds` 见到重复 tag 会拒绝整份配置
+        enabled.groupBy { it.tag }
+            .filterValues { it.size > 1 }
+            .keys
+            .forEach { errors += ConfigError.DuplicateInboundTag(it) }
+
         // C-5：节点与入站的 tag 都带前缀，理论上不会撞上保留 tag，
         // 但导入外部配置时仍需兜底。
         input.nodes.forEach { node ->
             if (node.outboundTag in WellKnownTag.ALL) {
                 errors += ConfigError.ReservedTag(node.outboundTag)
+            }
+        }
+        input.inbounds.forEach { inbound ->
+            if (inbound.udpTimeout.isNotBlank() && !SingBoxFormats.isDuration(inbound.udpTimeout)) {
+                errors += ConfigError.InvalidUdpTimeout(inbound.tag, inbound.udpTimeout)
             }
         }
 
@@ -320,14 +361,20 @@ class SingBoxConfigBuilder(
 
     // ---------------------------------------------------------------- 出站
 
-    private data class NodeOutbound(val tag: String, val json: JsonObject)
+    private data class NodeOutbound(
+        val node: ServerProfile,
+        val json: JsonObject,
+        val isEndpoint: Boolean,
+    ) {
+        val tag: String get() = node.outboundTag
+    }
 
     private fun buildNodeOutbounds(
         input: ConfigInput,
         warnings: MutableList<ConfigError>,
     ): List<NodeOutbound> {
         val factory = OutboundFactory()
-        return input.nodes
+        val built = input.nodes
             .sortedBy { it.sortOrder }
             .mapNotNull { node ->
                 when (val result = factory.create(node)) {
@@ -335,7 +382,7 @@ class SingBoxConfigBuilder(
                         if (result.insecureTls) {
                             warnings += ConfigError.InsecureTls(node.id, node.name)
                         }
-                        NodeOutbound(node.outboundTag, result.json)
+                        NodeOutbound(node, result.json, result.endpoint)
                     }
                     is OutboundResult.Invalid -> {
                         warnings += ConfigError.InvalidNode(node.id, node.name, result.reason)
@@ -343,12 +390,51 @@ class SingBoxConfigBuilder(
                     }
                 }
             }
-            // C-5：tag 撞车会让内核拒绝加载整份配置。节点 id 来自数据库主键，
-            // 正常路径下不会重复，但备份恢复与外部配置导入不受主键保护。
-            .distinctBy { it.tag }
+
+        // C-5：tag 撞车会让内核拒绝加载整份配置。节点 id 来自数据库主键，
+        // 正常路径下不会重复，但备份恢复与外部配置导入不受主键保护。
+        val seen = mutableSetOf<String>()
+        val unique = built.filter { candidate ->
+            seen.add(candidate.tag).also { fresh ->
+                if (!fresh) warnings += ConfigError.DuplicateOutboundTag(candidate.tag)
+            }
+        }
+
+        return dropBrokenChains(unique, warnings)
+    }
+
+    /**
+     * FR-2.10：把链式代理里成环或悬空的那些节点摘掉。
+     *
+     * 必须在这一步做而不是留给 `OutboundFactory`：判定需要看到「最终真的生成
+     * 出来的那一批 tag」，而那要等到工厂把所有节点都过完才知道。
+     */
+    private fun dropBrokenChains(
+        nodes: List<NodeOutbound>,
+        warnings: MutableList<ConfigError>,
+    ): List<NodeOutbound> {
+        val detours = nodes
+            .mapNotNull { candidate ->
+                candidate.node.detour
+                    ?.takeIf { it.isNotBlank() }
+                    ?.let { candidate.tag to it }
+            }
+            .toMap()
+        if (detours.isEmpty()) return nodes
+
+        val rejected = DetourResolver.reject(detours, nodes.mapTo(mutableSetOf()) { it.tag })
+        if (rejected.isEmpty()) return nodes
+
+        return nodes.filter { candidate ->
+            val reason = rejected[candidate.tag] ?: return@filter true
+            warnings += ConfigError.InvalidNode(candidate.node.id, candidate.node.name, reason)
+            false
+        }
     }
 
     private fun buildOutbounds(input: ConfigInput, nodes: List<NodeOutbound>): JsonArray {
+        // 策略组的候选要把 endpoint 一起算上：它跟 outbound 共用 tag 命名空间，
+        // 漏掉的话用户在界面上根本选不到自己的 WireGuard 节点
         val nodeTags = nodes.map { it.tag }
         return buildJsonArray {
             // C-7：无可用节点时只保留 direct，应用退化为纯中继模式（Every Proxy 等价行为）。
@@ -356,7 +442,7 @@ class SingBoxConfigBuilder(
                 add(buildSelector(input, nodeTags))
                 add(buildUrlTest(input, nodeTags))
             }
-            nodes.forEach { add(it.json) }
+            nodes.filterNot { it.isEndpoint }.forEach { add(it.json) }
             add(
                 buildJsonObject {
                     put("type", "direct")
@@ -506,7 +592,9 @@ class SingBoxConfigBuilder(
             is RuleAction.Sniff -> {
                 put("action", "sniff")
                 putIfNotEmpty("sniffer", action.sniffers)
-                putIfNotBlank("timeout", action.timeout)
+                // 写错的 timeout 会让整份配置解析失败；这里宁可不写，
+                // 让内核用它自己的默认值，也好过让所有节点一起失效
+                putIfNotBlank("timeout", action.timeout?.takeIf(SingBoxFormats::isDuration))
             }
             is RuleAction.Resolve -> {
                 put("action", "resolve")
