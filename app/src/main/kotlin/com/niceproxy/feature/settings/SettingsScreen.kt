@@ -64,6 +64,7 @@ import com.niceproxy.core.datastore.KeepAliveJournal
 import com.niceproxy.core.datastore.SettingsDataStore
 import com.niceproxy.core.designsystem.component.GlassPanel
 import com.niceproxy.core.designsystem.component.LocalHazeState
+import com.niceproxy.core.designsystem.theme.StatusColors
 import com.niceproxy.core.model.DnsSettings
 import com.niceproxy.core.model.InboundType
 import com.niceproxy.core.model.KeepAliveStats
