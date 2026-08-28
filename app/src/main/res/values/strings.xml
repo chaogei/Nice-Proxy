@@ -157,6 +157,22 @@
     <string name="inbound_open_warning">监听所有接口且未启用认证时，同一网络下的任何设备都能使用这个代理。</string>
     <string name="inbound_udp">允许 UDP 转发</string>
 
+    <!-- ============================ 首启引导 ============================ -->
+    <string name="onboarding_skip">跳过</string>
+    <string name="onboarding_next">下一步</string>
+    <string name="onboarding_start">开始使用</string>
+    <string name="onboarding_what_title">它代理的是别的设备</string>
+    <string name="onboarding_what_body">Nice Proxy 在这台手机上开一个代理端口，供 Switch、PS5、电视盒子、公司电脑这类装不了代理软件的设备使用。\n\n它不申请 VPN 权限，因此不会代理这台手机自己的 App。装好之后用手机浏览器测试，看到的仍然是没走代理 —— 这是正常的，不是坏了。</string>
+    <string name="onboarding_connect_title">在另一台设备上怎么填</string>
+    <string name="onboarding_connect_body">1. 让手机和那台设备连同一个 Wi-Fi，或者直接开手机热点让它连过来。\n\n2. 回到首页的「在其他设备上填写」，把任意一个地址填进电脑或游戏机的代理设置里 —— 卡片右侧就是复制按钮。\n\n3. 代理类型选 HTTP 或 SOCKS5 都可以，默认入站两种都收。\n\n换了网络之后地址会变，记得回首页重新抄一次。</string>
+    <string name="onboarding_battery_title">别让系统把它冻住</string>
+    <string name="onboarding_battery_body">代理跑在前台服务里。息屏一段时间后，系统的电池优化会冻结它 —— 表现是所有指过来的设备一起断网，而手机这边看不出任何异常。\n\n这一步是保活里最关键的，跳过的话后面多半会遇到「用着用着就断」。之后也能在「更多 → 设置 → 后台保活」里改。</string>
+    <string name="onboarding_battery_done">已关闭电池优化，这一步不用管了。</string>
+    <string name="onboarding_battery_action">去关闭电池优化</string>
+    <string name="onboarding_autostart_body">你的手机还有一套厂商自己的后台限制，和上面的电池优化是两回事，两个都要开才管用。</string>
+    <string name="onboarding_autostart_action">去允许自启动</string>
+    <string name="onboarding_step">第 %1$d 步，共 %2$d 步</string>
+
     <!-- ============================ 导航 ============================ -->
     <string name="nav_home">首页</string>
     <string name="nav_nodes">节点</string>

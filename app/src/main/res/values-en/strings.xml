@@ -147,6 +147,22 @@
     <string name="inbound_open_warning">Listening on all interfaces without authentication means any device on the same network can use this proxy.</string>
     <string name="inbound_udp">Allow UDP forwarding</string>
 
+    <!-- ============================ Onboarding ============================ -->
+    <string name="onboarding_skip">Skip</string>
+    <string name="onboarding_next">Next</string>
+    <string name="onboarding_start">Get started</string>
+    <string name="onboarding_what_title">It proxies your other devices</string>
+    <string name="onboarding_what_body">Nice Proxy opens a proxy port on this phone for devices that cannot run proxy software themselves: a Switch, a PS5, a TV box, a work laptop.\n\nIt does not ask for VPN permission, so it does not proxy this phone\'s own apps. Testing in the phone\'s browser after setup will still show an unproxied connection. That is expected, not a fault.</string>
+    <string name="onboarding_connect_title">Setting it up on the other device</string>
+    <string name="onboarding_connect_body">1. Put the phone and that device on the same Wi-Fi, or turn on the phone\'s hotspot and let it join.\n\n2. Go to \"Enter these on your other device\" on the home screen and put any one of the addresses into the computer or console\'s proxy settings. The copy button is on the right of the card.\n\n3. Either HTTP or SOCKS5 works as the proxy type; the default inbound accepts both.\n\nThe address changes when you switch networks, so come back to the home screen and copy it again.</string>
+    <string name="onboarding_battery_title">Stop the system from freezing it</string>
+    <string name="onboarding_battery_body">The proxy runs in a foreground service. After the screen has been off for a while, battery optimisation freezes it, and every device pointing here loses its connection at once while the phone shows nothing wrong.\n\nThis is the single most important step for staying alive; skip it and you will most likely hit \"it keeps dropping\" later. You can also change it under More → Settings → Background keep-alive.</string>
+    <string name="onboarding_battery_done">Battery optimisation is already off. Nothing to do here.</string>
+    <string name="onboarding_battery_action">Turn off battery optimisation</string>
+    <string name="onboarding_autostart_body">Your phone also has the manufacturer\'s own background restrictions. That is a separate thing from battery optimisation above, and both need to be allowed.</string>
+    <string name="onboarding_autostart_action">Allow auto-start</string>
+    <string name="onboarding_step">Step %1$d of %2$d</string>
+
     <!-- ============================ Navigation ============================ -->
     <string name="nav_home">Home</string>
     <string name="nav_nodes">Nodes</string>

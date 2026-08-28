@@ -46,6 +46,8 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -53,6 +55,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -66,6 +69,7 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.niceproxy.R
+import com.niceproxy.core.designsystem.component.FlatPanel
 import com.niceproxy.core.designsystem.component.GlassPanel
 import com.niceproxy.core.designsystem.component.LatencyIndicator
 import com.niceproxy.core.designsystem.component.LocalHazeState
@@ -78,6 +82,7 @@ import com.niceproxy.core.model.ServerGroup
 import com.niceproxy.core.model.ServerProfile
 import com.niceproxy.core.model.WellKnownTag
 import com.niceproxy.util.copyToClipboard
+import kotlinx.coroutines.launch
 
 @Composable
 fun NodesScreen(
@@ -99,254 +104,257 @@ fun NodesScreen(
     var pendingDeleteGroup by remember { mutableStateOf<ServerGroup?>(null) }
     var pendingDeleteNode by remember { mutableStateOf<ServerProfile?>(null) }
     var pendingBulkDelete by remember { mutableStateOf<BulkDelete?>(null) }
-    var banner by remember { mutableStateOf<String?>(null) }
+    val snackbarHostState = remember { SnackbarHostState() }
+    val scope = rememberCoroutineScope()
 
+    // 导入结果以前是插在搜索框下面的一张卡片。可这些提示恰恰是在列表底部
+    // 忙活时冒出来的 —— 批量测延迟、删重复节点 —— 那时它在屏幕外面。
     LaunchedEffect(message) {
         message?.let {
-            banner = it.resolve(context)
             viewModel.consumeMessage()
+            snackbarHostState.showSnackbar(it.resolve(context))
         }
     }
 
     LaunchedEffect(scanResult) {
-        scanResult?.let { banner = it }
+        scanResult?.let { snackbarHostState.showSnackbar(it) }
     }
 
-    LazyColumn(
-        modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(
-            start = 16.dp,
-            end = 16.dp,
-            top = WindowInsets.statusBars.asPaddingValues().calculateTopPadding() + 12.dp,
-            bottom = contentPadding.calculateBottomPadding() + 24.dp,
-        ),
-        verticalArrangement = Arrangement.spacedBy(10.dp),
-    ) {
-        item {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    text = stringResource(R.string.nodes_title),
-                    style = MaterialTheme.typography.headlineSmall,
-                    fontWeight = FontWeight.Bold,
-                    modifier = Modifier.weight(1f),
-                )
-                IconButton(onClick = onScan) {
-                    Icon(
-                        Icons.Default.QrCodeScanner,
-                        contentDescription = stringResource(R.string.nodes_scan),
+    Box(modifier = Modifier.fillMaxSize()) {
+        LazyColumn(
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(
+                start = 16.dp,
+                end = 16.dp,
+                top = WindowInsets.statusBars.asPaddingValues().calculateTopPadding() + 12.dp,
+                bottom = contentPadding.calculateBottomPadding() + 24.dp,
+            ),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            item {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = stringResource(R.string.nodes_title),
+                        style = MaterialTheme.typography.headlineSmall,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.weight(1f),
                     )
-                }
-                IconButton(
-                    onClick = { viewModel.importFromClipboard(clipboard.getText()?.text.orEmpty()) },
-                ) {
-                    Icon(
-                        Icons.Default.ContentPaste,
-                        contentDescription = stringResource(R.string.nodes_import_clipboard),
-                    )
-                }
-                IconButton(onClick = { showSubscriptionDialog = true }) {
-                    Icon(
-                        Icons.Default.RssFeed,
-                        contentDescription = stringResource(R.string.nodes_add_subscription),
-                    )
-                }
-                IconButton(onClick = onAddNode) {
-                    Icon(
-                        Icons.Default.Add,
-                        contentDescription = stringResource(R.string.nodes_add_manual),
-                    )
-                }
-                Box {
-                    IconButton(onClick = { showOverflow = true }) {
+                    IconButton(onClick = onScan) {
                         Icon(
-                            Icons.Default.MoreVert,
-                            contentDescription = stringResource(R.string.common_more_actions),
+                            Icons.Default.QrCodeScanner,
+                            contentDescription = stringResource(R.string.nodes_scan),
                         )
                     }
-                    DropdownMenu(
-                        expanded = showOverflow,
-                        onDismissRequest = { showOverflow = false },
+                    IconButton(
+                        onClick = { viewModel.importFromClipboard(clipboard.getText()?.text.orEmpty()) },
                     ) {
-                        BulkDelete.entries.forEach { action ->
-                            DropdownMenuItem(
-                                text = { Text(stringResource(action.labelRes)) },
-                                onClick = {
-                                    pendingBulkDelete = action
-                                    showOverflow = false
-                                },
-                            )
-                        }
-                    }
-                }
-            }
-        }
-
-        item {
-            OutlinedTextField(
-                value = state.query,
-                onValueChange = viewModel::setQuery,
-                placeholder = { Text(stringResource(R.string.nodes_search_placeholder)) },
-                leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
-                trailingIcon = if (state.query.isNotEmpty()) {
-                    {
-                        IconButton(onClick = { viewModel.setQuery("") }) {
-                            Icon(
-                                Icons.Default.Close,
-                                contentDescription = stringResource(R.string.common_clear),
-                            )
-                        }
-                    }
-                } else {
-                    null
-                },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth(),
-            )
-        }
-
-        if (state.isRefreshing) {
-            item { LinearProgressIndicator(modifier = Modifier.fillMaxWidth()) }
-        }
-
-        banner?.let { text ->
-            item {
-                GlassPanel(
-                    hazeState = LocalHazeState.current,
-                    modifier = Modifier.fillMaxWidth(),
-                    contentPadding = 12.dp,
-                    onClick = { banner = null },
-                ) {
-                    Text(text, style = MaterialTheme.typography.bodySmall)
-                }
-            }
-        }
-
-        item {
-            GroupChips(
-                groups = state.groups,
-                totalCount = state.servers.size,
-                selectedGroupId = state.selectedGroupId,
-                onSelect = viewModel::selectGroup,
-            )
-        }
-
-        state.groups.firstOrNull { it.id == state.selectedGroupId }?.let { group ->
-            if (group.type == GroupType.SUBSCRIPTION) {
-                item {
-                    SubscriptionPanel(
-                        group = group,
-                        onRefresh = { viewModel.refreshSubscription(group.id) },
-                        onDelete = { pendingDeleteGroup = group },
-                    )
-                }
-            }
-        }
-
-        item {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(
-                    text = stringResource(R.string.nodes_sort),
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                NodeSort.entries.forEach { option ->
-                    FilterChip(
-                        selected = state.sort == option,
-                        onClick = { viewModel.setSort(option) },
-                        label = { Text(stringResource(option.labelRes)) },
-                    )
-                }
-            }
-        }
-
-        item {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    text = stringResource(R.string.nodes_count, state.visibleServers.size),
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.weight(1f),
-                )
-                // TCPing 随时可测；真连接延迟更准但要求内核在跑
-                TestMode.entries.forEach { mode ->
-                    FilterChip(
-                        selected = state.testMode == mode,
-                        onClick = { viewModel.setTestMode(mode) },
-                        label = { Text(stringResource(mode.labelRes)) },
-                        enabled = !state.isTesting,
-                    )
-                    Spacer(Modifier.width(6.dp))
-                }
-                TextButton(onClick = viewModel::testAll, enabled = !state.isTesting) {
-                    if (state.isTesting) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(14.dp),
-                            strokeWidth = 2.dp,
-                        )
-                        Spacer(Modifier.width(8.dp))
-                        Text(
-                            stringResource(
-                                R.string.nodes_test_progress,
-                                state.testProgress ?: 0,
-                                state.testTotal,
-                            ),
-                        )
-                    } else {
                         Icon(
-                            Icons.Default.Bolt,
-                            contentDescription = null,
-                            modifier = Modifier.size(16.dp),
+                            Icons.Default.ContentPaste,
+                            contentDescription = stringResource(R.string.nodes_import_clipboard),
                         )
-                        Spacer(Modifier.width(4.dp))
-                        Text(stringResource(R.string.nodes_test))
                     }
+                    IconButton(onClick = { showSubscriptionDialog = true }) {
+                        Icon(
+                            Icons.Default.RssFeed,
+                            contentDescription = stringResource(R.string.nodes_add_subscription),
+                        )
+                    }
+                    IconButton(onClick = onAddNode) {
+                        Icon(
+                            Icons.Default.Add,
+                            contentDescription = stringResource(R.string.nodes_add_manual),
+                        )
+                    }
+                    Box {
+                        IconButton(onClick = { showOverflow = true }) {
+                            Icon(
+                                Icons.Default.MoreVert,
+                                contentDescription = stringResource(R.string.common_more_actions),
+                            )
+                        }
+                        DropdownMenu(
+                            expanded = showOverflow,
+                            onDismissRequest = { showOverflow = false },
+                        ) {
+                            BulkDelete.entries.forEach { action ->
+                                DropdownMenuItem(
+                                    text = { Text(stringResource(action.labelRes)) },
+                                    onClick = {
+                                        pendingBulkDelete = action
+                                        showOverflow = false
+                                    },
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            item {
+                OutlinedTextField(
+                    value = state.query,
+                    onValueChange = viewModel::setQuery,
+                    placeholder = { Text(stringResource(R.string.nodes_search_placeholder)) },
+                    leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
+                    trailingIcon = if (state.query.isNotEmpty()) {
+                        {
+                            IconButton(onClick = { viewModel.setQuery("") }) {
+                                Icon(
+                                    Icons.Default.Close,
+                                    contentDescription = stringResource(R.string.common_clear),
+                                )
+                            }
+                        }
+                    } else {
+                        null
+                    },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+
+            if (state.isRefreshing) {
+                item { LinearProgressIndicator(modifier = Modifier.fillMaxWidth()) }
+            }
+
+            item {
+                GroupChips(
+                    groups = state.groups,
+                    totalCount = state.servers.size,
+                    selectedGroupId = state.selectedGroupId,
+                    onSelect = viewModel::selectGroup,
+                )
+            }
+
+            state.groups.firstOrNull { it.id == state.selectedGroupId }?.let { group ->
+                if (group.type == GroupType.SUBSCRIPTION) {
+                    item {
+                        SubscriptionPanel(
+                            group = group,
+                            onRefresh = { viewModel.refreshSubscription(group.id) },
+                            onDelete = { pendingDeleteGroup = group },
+                        )
+                    }
+                }
+            }
+
+            item {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = stringResource(R.string.nodes_sort),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    NodeSort.entries.forEach { option ->
+                        FilterChip(
+                            selected = state.sort == option,
+                            onClick = { viewModel.setSort(option) },
+                            label = { Text(stringResource(option.labelRes)) },
+                        )
+                    }
+                }
+            }
+
+            item {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = stringResource(R.string.nodes_count, state.visibleServers.size),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.weight(1f),
+                    )
+                    // TCPing 随时可测；真连接延迟更准但要求内核在跑
+                    TestMode.entries.forEach { mode ->
+                        FilterChip(
+                            selected = state.testMode == mode,
+                            onClick = { viewModel.setTestMode(mode) },
+                            label = { Text(stringResource(mode.labelRes)) },
+                            enabled = !state.isTesting,
+                        )
+                        Spacer(Modifier.width(6.dp))
+                    }
+                    TextButton(onClick = viewModel::testAll, enabled = !state.isTesting) {
+                        if (state.isTesting) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(14.dp),
+                                strokeWidth = 2.dp,
+                            )
+                            Spacer(Modifier.width(8.dp))
+                            Text(
+                                stringResource(
+                                    R.string.nodes_test_progress,
+                                    state.testProgress ?: 0,
+                                    state.testTotal,
+                                ),
+                            )
+                        } else {
+                            Icon(
+                                Icons.Default.Bolt,
+                                contentDescription = null,
+                                modifier = Modifier.size(16.dp),
+                            )
+                            Spacer(Modifier.width(4.dp))
+                            Text(stringResource(R.string.nodes_test))
+                        }
+                    }
+                }
+            }
+
+            if (state.testMode == TestMode.REAL && !state.coreRunning) {
+                item {
+                    Text(
+                        text = stringResource(R.string.nodes_real_test_hint),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(horizontal = 4.dp),
+                    )
+                }
+            }
+
+            item {
+                AutoSelectRow(
+                    selected = state.selectedTag == WellKnownTag.AUTO,
+                    onClick = { viewModel.selectNode(WellKnownTag.AUTO) },
+                )
+            }
+
+            if (state.visibleServers.isEmpty()) {
+                item {
+                    Text(
+                        text = stringResource(R.string.nodes_empty),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(vertical = 24.dp, horizontal = 4.dp),
+                    )
+                }
+            } else {
+                items(state.visibleServers, key = { it.id }) { node ->
+                    NodeRow(
+                        node = node,
+                        selected = node.outboundTag == state.selectedTag,
+                        onSelect = { viewModel.selectNode(node.outboundTag) },
+                        onEdit = { onEditNode(node.id) },
+                        onShare = { viewModel.share(node) },
+                        onDelete = { pendingDeleteNode = node },
+                    )
                 }
             }
         }
 
-        if (state.testMode == TestMode.REAL && !state.coreRunning) {
-            item {
-                Text(
-                    text = stringResource(R.string.nodes_real_test_hint),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(horizontal = 4.dp),
-                )
-            }
-        }
-
-        item {
-            AutoSelectRow(
-                selected = state.selectedTag == WellKnownTag.AUTO,
-                onClick = { viewModel.selectNode(WellKnownTag.AUTO) },
-            )
-        }
-
-        if (state.visibleServers.isEmpty()) {
-            item {
-                Text(
-                    text = stringResource(R.string.nodes_empty),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(vertical = 24.dp, horizontal = 4.dp),
-                )
-            }
-        } else {
-            items(state.visibleServers, key = { it.id }) { node ->
-                NodeRow(
-                    node = node,
-                    selected = node.outboundTag == state.selectedTag,
-                    onSelect = { viewModel.selectNode(node.outboundTag) },
-                    onEdit = { onEditNode(node.id) },
-                    onShare = { viewModel.share(node) },
-                    onDelete = { pendingDeleteNode = node },
-                )
-            }
-        }
+        SnackbarHost(
+            hostState = snackbarHostState,
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .padding(
+                    start = 12.dp,
+                    end = 12.dp,
+                    bottom = contentPadding.calculateBottomPadding() + 8.dp,
+                ),
+        )
     }
 
     if (showSubscriptionDialog) {
@@ -386,7 +394,7 @@ fun NodesScreen(
                         text = target.link,
                         sensitive = true,
                     )
-                    banner = copied
+                    scope.launch { snackbarHostState.showSnackbar(copied) }
                     viewModel.dismissShare()
                 }) { Text(stringResource(R.string.nodes_share_copy)) }
             },
@@ -623,8 +631,9 @@ private fun NodeRow(
 ) {
     val unreadable = node.credentialState == CredentialState.UNREADABLE
     var menuOpen by remember { mutableStateOf(false) }
-    GlassPanel(
-        hazeState = LocalHazeState.current,
+    // 这一行会被订阅列表复制成几百份，所以用不带模糊的 FlatPanel：
+    // 批量测延迟时整张列表每秒重画，省下的是几百次 RenderEffect。
+    FlatPanel(
         modifier = Modifier.fillMaxWidth(),
         // 凭据读不出来的节点点了也用不了，只能重新导入 —— 直接把点击引到编辑页
         onClick = if (unreadable) onEdit else onSelect,
