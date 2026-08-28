@@ -129,6 +129,7 @@ class SettingsDataStore @Inject constructor(
             prefs[Keys.NETWORK_PREFERENCE] = updated.networkPreference.name
             prefs[Keys.IPV6_ENABLED] = updated.ipv6Enabled
             prefs[Keys.AUTO_RESTART] = updated.autoRestartOnFailure
+            prefs[Keys.PAC_DIRECT_FALLBACK] = updated.pacDirectFallback
         }
     }
 
@@ -142,6 +143,7 @@ class SettingsDataStore @Inject constructor(
             ?: NetworkPreference.AUTO,
         ipv6Enabled = prefs[Keys.IPV6_ENABLED] ?: true,
         autoRestartOnFailure = prefs[Keys.AUTO_RESTART] ?: true,
+        pacDirectFallback = prefs[Keys.PAC_DIRECT_FALLBACK] ?: false,
     )
 
     private fun readDnsSettings(prefs: Preferences) = DnsSettings(
@@ -205,6 +207,7 @@ class SettingsDataStore @Inject constructor(
         val NETWORK_PREFERENCE = stringPreferencesKey("network_preference")
         val IPV6_ENABLED = booleanPreferencesKey("ipv6_enabled")
         val AUTO_RESTART = booleanPreferencesKey("auto_restart_on_failure")
+        val PAC_DIRECT_FALLBACK = booleanPreferencesKey("pac_direct_fallback")
 
         /** 运行意图，非用户设置。见 [shouldBeRunning]。 */
         val SHOULD_BE_RUNNING = booleanPreferencesKey("should_be_running")

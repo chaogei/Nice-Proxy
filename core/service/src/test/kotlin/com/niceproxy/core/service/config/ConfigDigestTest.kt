@@ -59,6 +59,18 @@ class ConfigDigestTest {
     }
 
     @Test
+    @DisplayName("PAC 直连兜底开关变化也算变更 —— 脚本内容在启动时就定死在闭包里了")
+    fun detectsPacFallbackChange() {
+        // 不算进去的话，用户改了开关、点了「应用」，指纹一样于是不重启，
+        // PAC 服务继续用旧闭包发旧脚本 —— 又一个「设置改了但静默不生效」
+        val json = config()
+        val inbounds = listOf(pacInbound())
+
+        assertThat(key(json, inbounds = inbounds, pacDirectFallback = false))
+            .isNotEqualTo(key(json, inbounds = inbounds, pacDirectFallback = true))
+    }
+
+    @Test
     @DisplayName("配置解析不了时退回全文比对，而不是抛异常")
     fun fallsBackOnUnparseableJson() {
         val broken = "{ not json"
@@ -79,7 +91,8 @@ class ConfigDigestTest {
         json: String,
         inbounds: List<InboundService> = emptyList(),
         preference: NetworkPreference = NetworkPreference.AUTO,
-    ) = ConfigDigest.restartKey(json, inbounds, preference)
+        pacDirectFallback: Boolean = false,
+    ) = ConfigDigest.restartKey(json, inbounds, preference, pacDirectFallback)
 
     private fun config(selected: String = "auto", port: Int = 8080): String = """
         {

@@ -28,13 +28,23 @@ import java.security.MessageDigest
  */
 internal object ConfigDigest {
 
+    /**
+     * 宿主侧的几项刻意用独立参数而不是整个 `ServiceSettings`：那样的话，将来往
+     * 设置里加一个与内核无关的字段（比如「打开应用时自启」）就会改变指纹，
+     * 用户每动一次那种开关都被提示「配置已变更」，点下去白断一次流。
+     * 逐个列出会强制每次新增设置时做一次「它到底要不要重启」的判断。
+     */
     fun restartKey(
         configJson: String,
         inbounds: List<InboundService>,
         networkPreference: NetworkPreference,
+        pacDirectFallback: Boolean,
     ): String = listOf(
         normalize(configJson),
         pacSignature(inbounds),
+        // PAC 脚本的内容在服务启动时就定死在闭包里了，改了这一位必须重建 PAC 服务，
+        // 否则开关看起来生效了、实际发给客户端的还是旧脚本
+        pacDirectFallback.toString(),
         networkPreference.name,
     ).joinToString(SEPARATOR).sha256()
 

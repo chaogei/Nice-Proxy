@@ -239,13 +239,18 @@ class ProxyService : LifecycleService() {
      */
     private suspend fun prepare(result: ConfigResult.Success): AppliedConfig {
         val inbounds = inboundRepository.getAll().filter { it.enabled }
-        val preference = settings.serviceSettings.first().networkPreference
+        val service = settings.serviceSettings.first()
         return AppliedConfig(
             json = result.json,
             fingerprint = result.fingerprint,
-            restartKey = ConfigDigest.restartKey(result.json, inbounds, preference),
+            restartKey = ConfigDigest.restartKey(
+                configJson = result.json,
+                inbounds = inbounds,
+                networkPreference = service.networkPreference,
+                pacDirectFallback = service.pacDirectFallback,
+            ),
             inbounds = inbounds,
-            networkPreference = preference,
+            networkPreference = service.networkPreference,
             warnings = result.warnings.map { it.message },
         )
     }
@@ -315,9 +320,18 @@ class ProxyService : LifecycleService() {
             return
         }
 
+        // 现读一次而不是捕获 settings：这个闭包会被每个 PAC 请求调用，
+        // 而闭包在服务重启前不会重建，直接引用 Flow 会让开关改了也不生效
+        val allowFallback = settings.serviceSettings.first().pacDirectFallback
+
         pacServer.start(pac.listenPort) { host ->
             PacScript.build(
-                PacScript.Options(host = host, httpPort = httpPort, socksPort = socksPort),
+                PacScript.Options(
+                    host = host,
+                    httpPort = httpPort,
+                    socksPort = socksPort,
+                    allowDirectFallback = allowFallback,
+                ),
             )
         }
     }

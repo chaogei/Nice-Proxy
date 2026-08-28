@@ -33,6 +33,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -124,6 +125,7 @@ fun OnboardingScreen(onFinish: () -> Unit) {
                 if (page == OnboardingPage.BATTERY) {
                     Spacer(Modifier.height(16.dp))
                     BatteryOptimizationAction()
+                    VendorAutoStartAction()
                 }
             }
         }
@@ -161,6 +163,40 @@ private fun BatteryOptimizationAction() {
         ) {
             Text("去关闭电池优化")
         }
+    }
+}
+
+/**
+ * 厂商自启动白名单。
+ *
+ * 和电池优化是**并列的两道关卡**，不是补充说明：国产 ROM 的手机管家有一套独立于
+ * AOSP 的自启动管控，不在名单里的话前台服务照样被清掉，连 `START_STICKY` 都会被
+ * 忽略——进程根本不会被重建。
+ *
+ * 放进引导而不是只留在设置页，是因为这一项**没有任何 API 能检测用户加没加**。
+ * 电池优化至少还能查状态、在首页报警提醒；这一项一旦错过，之后就再没有任何时机
+ * 提起它了，用户只会在某天发现「昨晚又断了」而不知道该去开什么。
+ */
+@Composable
+private fun VendorAutoStartAction() {
+    val context = LocalContext.current
+    // 组件解析要遍历十几个候选，且装了哪个手机管家不会在引导期间变
+    val hasVendorSettings = remember(context) { KeepAlive.hasVendorAutoStartSettings(context) }
+    if (!hasVendorSettings) return
+
+    Spacer(Modifier.height(12.dp))
+    Text(
+        text = "你的手机还有一套厂商自己的后台限制，和上面的电池优化是两回事，" +
+            "两个都要开才管用。",
+        style = MaterialTheme.typography.bodyMedium,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+    Spacer(Modifier.height(8.dp))
+    FilledTonalButton(
+        onClick = { KeepAlive.openAutoStartSettings(context) },
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Text("去允许自启动")
     }
 }
 
@@ -217,6 +253,7 @@ private enum class OnboardingPage(
         title = "别让系统把它冻住",
         body = "代理跑在前台服务里。息屏一段时间后，系统的电池优化会冻结它 —— " +
             "表现是所有指过来的设备一起断网，而手机这边看不出任何异常。\n\n" +
-            "现在关掉可以避免这件事，之后也能在「更多 → 设置 → 后台保活」里改。",
+            "这一步是保活里最关键的，跳过的话后面多半会遇到「用着用着就断」。" +
+            "之后也能在「更多 → 设置 → 后台保活」里改。",
     ),
 }

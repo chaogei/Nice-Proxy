@@ -58,10 +58,12 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import com.niceproxy.core.data.BackupRepository
+import com.niceproxy.core.data.InboundRepository
 import com.niceproxy.core.datastore.SettingsDataStore
 import com.niceproxy.core.designsystem.component.GlassPanel
 import com.niceproxy.core.designsystem.component.LocalHazeState
 import com.niceproxy.core.model.DnsSettings
+import com.niceproxy.core.model.InboundType
 import com.niceproxy.core.model.NetworkPreference
 import com.niceproxy.core.model.ServiceSettings
 import com.niceproxy.core.service.core.NiceCore
@@ -85,12 +87,15 @@ data class SettingsUiState(
     val service: ServiceSettings = ServiceSettings(),
     val dns: DnsSettings = DnsSettings(),
     val coreVersion: String = "",
+    /** 没配 PAC 入站的人不该看到 PAC 相关的开关。 */
+    val hasPacInbound: Boolean = false,
 )
 
 @HiltViewModel
 class SettingsViewModel @Inject constructor(
     private val settings: SettingsDataStore,
     private val backupRepository: BackupRepository,
+    private val inboundRepository: InboundRepository,
     @ApplicationContext private val context: Context,
     core: NiceCore,
 ) : ViewModel() {
@@ -160,8 +165,14 @@ class SettingsViewModel @Inject constructor(
     val uiState: StateFlow<SettingsUiState> = combine(
         settings.serviceSettings,
         settings.dnsSettings,
-    ) { service, dns ->
-        SettingsUiState(service = service, dns = dns, coreVersion = version)
+        inboundRepository.inbounds,
+    ) { service, dns, inbounds ->
+        SettingsUiState(
+            service = service,
+            dns = dns,
+            coreVersion = version,
+            hasPacInbound = inbounds.any { it.enabled && it.type == InboundType.PAC },
+        )
     }.stateIn(
         viewModelScope,
         SharingStarted.WhileSubscribed(5_000),
@@ -173,6 +184,7 @@ class SettingsViewModel @Inject constructor(
     fun setPowerSave(value: Boolean) = update { it.copy(powerSave = value) }
     fun setKeepWifiAwake(value: Boolean) = update { it.copy(keepWifiAwake = value) }
     fun setAutoRestart(value: Boolean) = update { it.copy(autoRestartOnFailure = value) }
+    fun setPacDirectFallback(value: Boolean) = update { it.copy(pacDirectFallback = value) }
     fun setIpv6(value: Boolean) = update { it.copy(ipv6Enabled = value) }
     fun setNetworkPreference(value: NetworkPreference) = update { it.copy(networkPreference = value) }
 
@@ -309,6 +321,18 @@ fun SettingsScreen(
                 state.service.autoRestartOnFailure,
                 viewModel::setAutoRestart,
             )
+            // 只在真的用了 PAC 时才露出来，否则是一个对多数人毫无意义、
+            // 却听起来很吓人的开关
+            if (state.hasPacInbound) {
+                SwitchRow(
+                    "PAC：代理不可用时允许直连",
+                    "关闭时代理一挂客户端就断网，这是有意的 —— 游戏机和电视盒子" +
+                        "不会提示「没在走代理」，静默裸奔比断网危险得多。" +
+                        "只有在断网影响更大时才打开。",
+                    state.service.pacDirectFallback,
+                    viewModel::setPacDirectFallback,
+                )
+            }
             ClickableRow(
                 title = "忽略电池优化",
                 subtitle = if (ignoringBatteryOptimizations) {
