@@ -15,6 +15,11 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
+    testOptions {
+        // LatencyTester 在异常路径上会调 android.util.Log，而 android.jar 里的桩方法
+        // 默认直接抛异常 —— 本该停在断言上的测试会变成一句看不懂的 "not mocked"。
+        unitTests.isReturnDefaultValues = true
+    }
 }
 
 dependencies {
@@ -27,4 +32,15 @@ dependencies {
 
     implementation(libs.hilt.android)
     ksp(libs.hilt.compiler)
+
+    testImplementation(libs.junit5.jupiter)
+    testRuntimeOnly(libs.junit5.platform.launcher)
+    testImplementation(libs.truth)
+    testImplementation(libs.kotlinx.coroutines.test)
+    testImplementation(libs.turbine)
+    testImplementation(libs.okhttp.mockwebserver)
+}
+
+tasks.withType<Test>().configureEach {
+    useJUnitPlatform()
 }
