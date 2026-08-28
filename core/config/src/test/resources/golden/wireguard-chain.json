@@ -1,0 +1,158 @@
+{
+  "log": {
+    "level": "info",
+    "timestamp": true
+  },
+  "dns": {
+    "servers": [
+      {
+        "type": "https",
+        "tag": "dns-remote",
+        "server": "1.1.1.1",
+        "detour": "proxy"
+      },
+      {
+        "type": "udp",
+        "tag": "dns-local",
+        "server": "223.5.5.5"
+      }
+    ],
+    "final": "dns-remote",
+    "strategy": "prefer_ipv4"
+  },
+  "endpoints": [
+    {
+      "type": "wireguard",
+      "tag": "node-wg",
+      "mtu": 1408,
+      "address": [
+        "172.16.0.2/32",
+        "fd01::2/128"
+      ],
+      "private_key": "bmljZS1wcm94eS1wcml2YXRlLWtleS1maXh0dXJlLTE=",
+      "peers": [
+        {
+          "address": "wg.example.com",
+          "port": 51820,
+          "public_key": "bmljZS1wcm94eS1wZWVyLXB1YmxpYy1rZXktZml4LTI=",
+          "pre_shared_key": "bmljZS1wcm94eS1wcmUtc2hhcmVkLWtleS1maXgtMzM=",
+          "allowed_ips": [
+            "0.0.0.0/0",
+            "::/0"
+          ],
+          "persistent_keepalive_interval": 25,
+          "reserved": [
+            209,
+            98,
+            59
+          ]
+        }
+      ],
+      "detour": "node-relay"
+    }
+  ],
+  "inbounds": [
+    {
+      "type": "mixed",
+      "tag": "in-mix",
+      "listen": "0.0.0.0",
+      "listen_port": 8080
+    }
+  ],
+  "outbounds": [
+    {
+      "type": "selector",
+      "tag": "proxy",
+      "outbounds": [
+        "auto",
+        "node-relay",
+        "node-exit",
+        "node-wg",
+        "direct"
+      ],
+      "default": "auto"
+    },
+    {
+      "type": "urltest",
+      "tag": "auto",
+      "outbounds": [
+        "node-relay",
+        "node-exit",
+        "node-wg"
+      ],
+      "url": "https://www.gstatic.com/generate_204",
+      "interval": "3m",
+      "tolerance": 50
+    },
+    {
+      "type": "vmess",
+      "tag": "node-relay",
+      "server": "vm.example.com",
+      "server_port": 443,
+      "uuid": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+      "security": "auto",
+      "transport": {
+        "type": "ws",
+        "path": "/ws",
+        "headers": {
+          "Host": "vm.example.com"
+        }
+      },
+      "tls": {
+        "enabled": true,
+        "server_name": "vm.example.com"
+      }
+    },
+    {
+      "type": "hysteria2",
+      "tag": "node-exit",
+      "server": "hy2.example.com",
+      "server_port": 443,
+      "password": "pw",
+      "up_mbps": 100,
+      "down_mbps": 300,
+      "tls": {
+        "enabled": true,
+        "server_name": "hy2.example.com",
+        "alpn": [
+          "h3"
+        ]
+      },
+      "detour": "node-relay"
+    },
+    {
+      "type": "direct",
+      "tag": "direct"
+    }
+  ],
+  "route": {
+    "rules": [
+      {
+        "action": "sniff",
+        "timeout": "300ms"
+      },
+      {
+        "protocol": "dns",
+        "action": "hijack-dns"
+      },
+      {
+        "ip_is_private": true,
+        "outbound": "direct"
+      }
+    ],
+    "final": "proxy",
+    "auto_detect_interface": false,
+    "default_domain_resolver": "dns-local"
+  },
+  "experimental": {
+    "clash_api": {
+      "external_controller": "127.0.0.1:19090",
+      "secret": "test-secret"
+    },
+    "cache_file": {
+      "enabled": true,
+      "path": "/data/user/0/com.niceproxy/files/cache.db",
+      "store_rdrc": true
+    }
+  }
+}
