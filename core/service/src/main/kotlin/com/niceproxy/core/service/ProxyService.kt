@@ -284,6 +284,10 @@ class ProxyService : LifecycleService() {
         startedAtMillis: Long = System.currentTimeMillis(),
     ) {
         runningConfig = config
+        // 内核刚起来，控制面此刻一定是通的。不主动放行的话，上一个实例死掉时打开的
+        // 熔断还会挡住接下来几秒的每一次 REST —— 用户点节点切换得到的是「正在冷却」，
+        // 而那几秒恰恰是他最急着确认代理有没有恢复的时候。
+        clashApi.noteCoreAlive()
         controller.updateConfigOutdated(false)
         acquireLocks(settings.serviceSettings.first().keepWifiAwake)
         startPacIfConfigured(config.inbounds)
@@ -475,37 +479,55 @@ class ProxyService : LifecycleService() {
                 Log.w(TAG, "读取 Clash API 配置失败，内核存活探测未启用", it)
                 return@launch
             }
-            var misses = 0
+            val liveness = CoreLiveness(
+                missesBeforeDead = HEALTH_MISSES_BEFORE_REVIVE,
+                probe = { probeCore(api) },
+                // 探到了就说出去，别让控制面的熔断继续挡着用户的操作
+                onAlive = clashApi::noteCoreAlive,
+            )
+            var checksSinceMetrics = 0
             while (true) {
                 delay(HEALTH_CHECK_INTERVAL_MS)
                 if (controller.state.value !is ProxyState.Running) {
-                    // 重启期间探不到是理所当然的，那些不该算进死亡判定里
-                    misses = 0
+                    liveness.reset()
                     continue
                 }
 
-                if (probeCore(api)) {
-                    misses = 0
-                    // 稳住足够久才算真的好了，这时才把退避计数清掉
-                    if (failureStreak > 0 && coreUptime() >= MIN_HEALTHY_UPTIME_MS) {
-                        Log.i(TAG, "内核已稳定运行，重置退避计数")
-                        failureStreak = 0
+                when (liveness.check()) {
+                    CoreLiveness.Verdict.ALIVE ->
+                        // 稳住足够久才算真的好了，这时才把退避计数清掉
+                        if (failureStreak > 0 && coreUptime() >= MIN_HEALTHY_UPTIME_MS) {
+                            Log.i(TAG, "内核已稳定运行，重置退避计数")
+                            failureStreak = 0
+                        }
+
+                    CoreLiveness.Verdict.WATCHING ->
+                        Log.i(TAG, "内核存活探测第 ${liveness.consecutiveMisses} 次失败，再观察一轮")
+
+                    CoreLiveness.Verdict.DEAD -> {
+                        Log.w(TAG, "内核已连续 $HEALTH_MISSES_BEFORE_REVIVE 次不响应，尝试拉起")
+                        runApply("内核自愈") { reviveCore() }
                     }
-                    continue
                 }
 
-                // 单次探测失败不足以判死刑：内核正忙于处理一波连接、或者刚好赶上
-                // 系统在做别的事，都可能让一次回环请求超时。为此重启内核的代价是
-                // 断掉全屋设备的连接，得先确认它是真的不动了。
-                if (++misses < HEALTH_MISSES_BEFORE_REVIVE) {
-                    Log.i(TAG, "内核存活探测第 $misses 次失败，再观察一轮")
-                    continue
+                if (++checksSinceMetrics >= METRICS_LOG_EVERY_N_CHECKS) {
+                    checksSinceMetrics = 0
+                    logRuntimeMetrics()
                 }
-                Log.w(TAG, "内核已连续 $misses 次不响应，尝试拉起")
-                misses = 0
-                runApply("内核自愈") { reviveCore() }
             }
         }
+    }
+
+    /**
+     * 搭着存活探测的车打一行观测量。
+     *
+     * 不另起一个定时器：这些数字只在「有人在查一个说不清的现象」时才有人看，
+     * 为它单独排一个协程，代价全落在从来不看它的那 99% 的会话上。
+     */
+    private fun logRuntimeMetrics() {
+        if (!Log.isLoggable(TAG, Log.DEBUG)) return
+        val pac = if (pacServer.isRunning) pacServer.metrics() else null
+        Log.d(TAG, RuntimeMetricsLog.format(clashApi.metrics(), pac))
     }
 
     /**
@@ -1088,6 +1110,14 @@ class ProxyService : LifecycleService() {
          * 仍远快于看门狗那张 15 分钟的粗网。
          */
         private const val HEALTH_MISSES_BEFORE_REVIVE = 3
+
+        /**
+         * 每这么多次存活探测打一行运行期指标，即约一分钟一行。
+         *
+         * 再密就会把 logcat 里真正要看的东西挤出缓冲区 —— 这些数字全是单调累加的
+         * 计数器，采样密度对趋势判断没有任何帮助。
+         */
+        private const val METRICS_LOG_EVERY_N_CHECKS = 6
 
         /**
          * 内核活过这么久才算「稳住了」，之前累积的退避计数到此清零。
