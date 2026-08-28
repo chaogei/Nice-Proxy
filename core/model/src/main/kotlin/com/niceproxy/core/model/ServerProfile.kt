@@ -26,6 +26,16 @@ data class ServerProfile(
     val transport: TransportConfig? = null,
     val tls: TlsConfig? = null,
     val multiplex: MultiplexConfig? = null,
+    /**
+     * 链式代理：本节点的流量先经由这个 tag 指向的出站发出（FR-2.10）。
+     *
+     * 取值是另一个节点的 [outboundTag]，或 [WellKnownTag.DIRECT]。**不能**指向
+     * `proxy` / `auto` —— 那两个策略组的候选里就包含本节点，会绕成一个环。
+     *
+     * 默认 null（直接出站）。配置生成器会校验自指、成环、指向不存在或不可用的
+     * 节点这三种情况，任何一种都让本节点不可用，而不是悄悄退化成不走链路。
+     */
+    val detour: String? = null,
     val sortOrder: Int = 0,
     /** 最近一次测速结果，单位毫秒。null = 未测试；[LATENCY_TIMEOUT] = 超时。 */
     val latencyMs: Int? = null,

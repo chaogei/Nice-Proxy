@@ -101,7 +101,10 @@ class SubscriptionParserTest {
 
             assertThat(result.format).isEqualTo(SubscriptionFormat.CLASH_YAML)
             assertThat(result.nodes).hasSize(3)
-            assertThat(result.failedEntries).containsExactly("坏节点")
+            // 失败明细现在带上原因：只给一句「坏节点」的话，用户既判断不出是自己
+            // 复制漏了字符，还是机场用了我们不认识的协议，而这两种处理方式相反
+            assertThat(result.failures.map { it.entry }).containsExactly("坏节点")
+            assertThat(result.failures.single().reason).contains("unknown-proto")
         }
 
         @Test

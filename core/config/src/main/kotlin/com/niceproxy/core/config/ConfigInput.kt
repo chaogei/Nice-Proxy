@@ -132,16 +132,116 @@ sealed interface ConfigError {
     ) : ConfigError {
         override val message: String get() = "规则集「$tag」不可用：$reason"
     }
+
+    /**
+     * 两个入站用了同一个 tag。
+     *
+     * `option.checkInbounds` 见到重复 tag 直接报 `duplicate inbound tag` 并拒绝
+     * 整份配置。入站 tag 由 id 派生，正常路径不会撞，但备份恢复与外部导入不受
+     * 主键保护 —— 而端口查重挡不住它们（两个 tag 相同、端口不同的入站）。
+     */
+    data class DuplicateInboundTag(
+        val tag: String,
+        override val message: String = "入站标签 $tag 重复",
+    ) : ConfigError
+
+    /**
+     * 两个节点算出了同一个出站 tag。
+     *
+     * outbound 与 endpoint 在内核里共用一个 tag 命名空间
+     * （`checkOutbounds` 是合起来查重的），撞上同样是整份配置被拒。
+     */
+    data class DuplicateOutboundTag(
+        val tag: String,
+        override val message: String = "出站标签 $tag 重复，已只保留第一个",
+    ) : ConfigError
+
+    /**
+     * 入站的 `udp_timeout` 不是合法时长。
+     *
+     * 它是 `badoption.Duration`，解析失败发生在读配置的第一步，整份配置作废。
+     */
+    data class InvalidUdpTimeout(val tag: String, val value: String) : ConfigError {
+        override val message: String
+            get() = "入站「$tag」的 UDP 超时「$value」不是合法时长，应形如 5m"
+    }
+
+    /**
+     * 生成结果没通过自检，见 [SingBoxSelfCheck]。
+     *
+     * 走到这里说明生成器自己有 bug。宁可在这里失败：让内核去拒绝的话，
+     * 用户看到的是一句没有上下文的 Go 报错，而我们连是哪个环节出的问题都不知道。
+     */
+    data class SelfCheckFailed(val reason: String) : ConfigError {
+        override val message: String get() = "配置自检未通过：$reason"
+    }
+}
+
+/**
+ * 一次生成的完整结论，供 UI 一次性呈现。
+ *
+ * 原先 `Success.warnings` 与 `Failure.errors` 是两个互不相干的列表，界面上要么
+ * 只看得到「启动失败」要么只看得到「有几个节点被跳过」，用户没法在一个地方
+ * 弄清楚「我这份配置到底哪里不对」。这里把两边收敛成同一个结构，并按用户
+ * 真正关心的维度分好类。
+ */
+data class ConfigDiagnostics(
+    /** 阻断生成的问题。非空即表示这次没有产出配置。 */
+    val blocking: List<ConfigError> = emptyList(),
+    /** 不阻断，但用户应当知道的问题。 */
+    val warnings: List<ConfigError> = emptyList(),
+) {
+    val isUsable: Boolean get() = blocking.isEmpty()
+
+    /** 被跳过的节点，UI 可以逐条指回节点详情页。 */
+    val skippedNodes: List<ConfigError.InvalidNode>
+        get() = (blocking + warnings).filterIsInstance<ConfigError.InvalidNode>()
+
+    /** 关掉了证书校验的节点。 */
+    val insecureNodes: List<ConfigError.InsecureTls>
+        get() = (blocking + warnings).filterIsInstance<ConfigError.InsecureTls>()
+
+    /** 被剔除或被降级的路由/规则集问题。 */
+    val routingIssues: List<ConfigError>
+        get() = (blocking + warnings).filter {
+            it is ConfigError.EmptyRule ||
+                it is ConfigError.DanglingOutbound ||
+                it is ConfigError.InvalidRuleSet
+        }
+
+    val isEmpty: Boolean get() = blocking.isEmpty() && warnings.isEmpty()
+
+    /** 给通知栏 / 弹窗用的单段文案，按严重程度排序，条数有上限。 */
+    fun summary(limit: Int = DEFAULT_SUMMARY_LIMIT): String =
+        (blocking + warnings).take(limit).joinToString("；") { it.message }
+
+    private companion object {
+        const val DEFAULT_SUMMARY_LIMIT = 5
+    }
 }
 
 sealed interface ConfigResult {
+
+    /** 无论成功失败都能拿到的结构化诊断，见 [ConfigDiagnostics]。 */
+    val diagnostics: ConfigDiagnostics
+
     data class Success(
         val json: String,
         /** 内容哈希，用于判断是否需要重启内核，见 docs/DESIGN.md §6.3。 */
         val fingerprint: String,
         /** 被跳过的无效节点，UI 可提示用户但不阻断启动。 */
         val warnings: List<ConfigError> = emptyList(),
-    ) : ConfigResult
+    ) : ConfigResult {
+        override val diagnostics: ConfigDiagnostics
+            get() = ConfigDiagnostics(warnings = warnings)
+    }
 
-    data class Failure(val errors: List<ConfigError>) : ConfigResult
+    data class Failure(
+        val errors: List<ConfigError>,
+        /** 失败时同样可能攒下了一批非阻断问题，别丢掉。 */
+        val warnings: List<ConfigError> = emptyList(),
+    ) : ConfigResult {
+        override val diagnostics: ConfigDiagnostics
+            get() = ConfigDiagnostics(blocking = errors, warnings = warnings)
+    }
 }

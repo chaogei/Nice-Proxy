@@ -122,6 +122,31 @@ internal object Fixtures {
         credentialState = CredentialState.UNREADABLE,
     )
 
+    /**
+     * WireGuard 密钥恒为 32 字节，标准 Base64 之后固定 44 字符。生成器会真的
+     * 按这个长度校验 —— 占位字符串会被当成非法密钥挡下来。
+     */
+    const val WG_PRIVATE_KEY = "bmljZS1wcm94eS1wcml2YXRlLWtleS1maXh0dXJlLTE="
+    const val WG_PEER_PUBLIC_KEY = "bmljZS1wcm94eS1wZWVyLXB1YmxpYy1rZXktZml4LTI="
+    const val WG_PRE_SHARED_KEY = "bmljZS1wcm94eS1wcmUtc2hhcmVkLWtleS1maXgtMzM="
+
+    fun wireGuard(
+        id: String = "wg",
+        params: ProtocolParams.WireGuard = ProtocolParams.WireGuard(
+            privateKey = WG_PRIVATE_KEY,
+            peerPublicKey = WG_PEER_PUBLIC_KEY,
+            localAddress = listOf("172.16.0.2/32"),
+        ),
+    ) = ServerProfile(
+        id = id,
+        groupId = "g1",
+        name = "WG 节点",
+        protocol = ProxyProtocol.WIREGUARD,
+        server = "wg.example.com",
+        serverPort = 51820,
+        params = params,
+    )
+
     fun shadowsocks(id: String = "ss") = ServerProfile(
         id = id,
         groupId = "g1",

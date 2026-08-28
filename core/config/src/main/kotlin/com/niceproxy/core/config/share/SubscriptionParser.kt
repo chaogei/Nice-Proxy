@@ -1,5 +1,7 @@
 package com.niceproxy.core.config.share
 
+import com.niceproxy.core.model.BrutalConfig
+import com.niceproxy.core.model.MultiplexConfig
 import com.niceproxy.core.model.ProtocolParams
 import com.niceproxy.core.model.ProxyProtocol
 import com.niceproxy.core.model.RealityConfig
@@ -40,14 +42,17 @@ enum class SubscriptionFormat {
 data class SubscriptionResult(
     val format: SubscriptionFormat,
     val nodes: List<ServerProfile>,
-    val failedEntries: List<String> = emptyList(),
+    /** 没能导入的条目，每条都带上原因，见 [ParseFailure]。 */
+    val failures: List<ParseFailure> = emptyList(),
     /**
      * 有多少个节点要求关闭 TLS 证书校验、已被忽略，见 RemoteTlsPolicy。
      *
      * 这些节点仍然会被导入，只是证书校验保持开启。
      */
     val ignoredInsecureCount: Int = 0,
-)
+) {
+    val failedEntries: List<String> get() = failures.map { it.message }
+}
 
 object SubscriptionParser {
 
@@ -114,7 +119,7 @@ object SubscriptionParser {
                         SubscriptionResult(
                             format = detected.format,
                             nodes = it.nodes,
-                            failedEntries = it.failedLines,
+                            failures = it.failures,
                             ignoredInsecureCount = it.ignoredInsecureCount,
                         )
                     }
@@ -198,20 +203,33 @@ object SubscriptionParser {
             ?: throw IllegalArgumentException("YAML 中没有 proxies 段")
 
         val nodes = mutableListOf<ServerProfile>()
-        val failures = mutableListOf<String>()
+        val failures = mutableListOf<ParseFailure>()
+        // mihomo 的 dialer-proxy 引用的是**节点名**，而我们的 tag 由新生成的 id
+        // 派生，所以要等全部节点都建出来之后再回填
+        val chains = mutableMapOf<String, String>()
         proxies.forEach { raw ->
             val proxy = raw as? Map<String, Any?>
             if (proxy == null) {
-                failures += "未命名节点"
+                failures += ParseFailure("未命名节点", "不是一个 YAML 映射")
                 return@forEach
             }
             runCatching { clashProxyToProfile(proxy, groupId) }
                 .fold(
-                    onSuccess = { nodes += it },
-                    onFailure = { failures += (proxy["name"]?.toString() ?: "未命名节点") },
+                    onSuccess = { profile ->
+                        nodes += profile
+                        proxy["dialer-proxy"]?.toString()?.takeIf { it.isNotBlank() }
+                            ?.let { chains[profile.id] = it }
+                    },
+                    onFailure = { error ->
+                        failures += ParseFailure.of(
+                            proxy["name"]?.toString() ?: "未命名节点",
+                            error,
+                        )
+                    },
                 )
         }
-        return SubscriptionResult(SubscriptionFormat.CLASH_YAML, nodes, failures)
+        val chained = ChainLinker.link(nodes, chains, { it.name }, failures)
+        return SubscriptionResult(SubscriptionFormat.CLASH_YAML, chained, failures)
     }
 
     @Suppress("UNCHECKED_CAST")
@@ -314,6 +332,35 @@ object SubscriptionParser {
             "anytls" -> ProxyProtocol.ANYTLS to ProtocolParams.AnyTls(
                 password = str("password") ?: throw IllegalArgumentException("缺少 password"),
             )
+            "hysteria" -> ProxyProtocol.HYSTERIA to ProtocolParams.Hysteria(
+                authString = str("auth-str", "auth_str", "auth")
+                    ?: throw IllegalArgumentException("缺少 auth-str"),
+                // Clash 写的是带单位的 "30 Mbps"，sing-box 的 up/down 认同一套写法
+                up = str("up"),
+                down = str("down"),
+                obfs = str("obfs"),
+            )
+            "ssh" -> ProxyProtocol.SSH to ProtocolParams.Ssh(
+                user = str("username", "user") ?: throw IllegalArgumentException("缺少 username"),
+                password = str("password"),
+                privateKey = str("private-key", "privateKey"),
+                privateKeyPassphrase = str("private-key-passphrase"),
+                hostKey = anyToStringList(proxy["host-key"]),
+                hostKeyAlgorithms = anyToStringList(proxy["host-key-algorithms"]),
+            )
+            "wireguard" -> ProxyProtocol.WIREGUARD to ProtocolParams.WireGuard(
+                privateKey = str("private-key", "privateKey")
+                    ?: throw IllegalArgumentException("缺少 private-key"),
+                peerPublicKey = str("public-key", "publicKey")
+                    ?: throw IllegalArgumentException("缺少 public-key"),
+                preSharedKey = str("pre-shared-key", "preSharedKey"),
+                // mihomo 把本地地址拆成 ip / ipv6 两个字段，而且都不带掩码位
+                localAddress = listOfNotNull(str("ip"), str("ipv6")).map(::asCidrPrefix),
+                allowedIps = anyToStringList(proxy["allowed-ips"]).map(::asCidrPrefix),
+                reserved = anyToIntList(proxy["reserved"]),
+                mtu = str("mtu")?.toIntOrNull(),
+                persistentKeepaliveInterval = str("persistent-keepalive")?.toIntOrNull(),
+            )
             "socks5" -> ProxyProtocol.SOCKS to ProtocolParams.Socks(
                 username = str("username"),
                 password = str("password"),
@@ -335,7 +382,9 @@ object SubscriptionParser {
             serverPort = port,
             params = params,
             transport = transport.takeIf { protocol.supportsTransport },
-            tls = tls,
+            // 机场模板给 ss / socks 节点顺手写上 `tls: true` 是常事。mihomo 那边
+            // 这个字段本来就没用，照搬到 sing-box 却是个未知字段，整份配置作废
+            tls = tls.takeIf { protocol.supportsTls },
             createdAt = now,
             updatedAt = now,
         )
@@ -348,10 +397,15 @@ object SubscriptionParser {
             ?: throw IllegalArgumentException("JSON 根节点不是对象")
         val outbounds = root["outbounds"] as? JsonArray
             ?: throw IllegalArgumentException("JSON 中没有 outbounds 段")
+        // 1.11+ 的 WireGuard 在 endpoints 里，跟 outbounds 共用 tag 命名空间
+        val endpoints = (root["endpoints"] as? JsonArray).orEmpty()
 
         val nodes = mutableListOf<ServerProfile>()
-        val failures = mutableListOf<String>()
-        outbounds.forEach { element ->
+        val failures = mutableListOf<ParseFailure>()
+        // detour 引用的是源配置里的 tag，本地 tag 是新生成的，要回填一遍
+        val chains = mutableMapOf<String, String>()
+
+        (outbounds + endpoints).forEach { element ->
             // outbounds 里混进字符串或 null 不该让整份订阅失败
             val outbound = element as? JsonObject ?: return@forEach
             val type = outbound.str("type")
@@ -359,11 +413,18 @@ object SubscriptionParser {
             if (type == null || type in NON_NODE_TYPES) return@forEach
             runCatching { singBoxOutboundToProfile(outbound, groupId) }
                 .fold(
-                    onSuccess = { nodes += it },
-                    onFailure = { failures += (outbound.str("tag") ?: type) },
+                    onSuccess = { profile ->
+                        nodes += profile
+                        outbound.str("detour")?.let { chains[profile.id] = it }
+                    },
+                    onFailure = { error ->
+                        failures += ParseFailure.of(outbound.str("tag") ?: type, error)
+                    },
                 )
         }
-        return SubscriptionResult(SubscriptionFormat.SING_BOX_JSON, nodes, failures)
+        // 源配置里的 tag 就是我们导入时用的节点名，按它回填链路
+        val chained = ChainLinker.link(nodes, chains, { it.name }, failures)
+        return SubscriptionResult(SubscriptionFormat.SING_BOX_JSON, chained, failures)
     }
 
     private val NON_NODE_TYPES = setOf("selector", "urltest", "direct", "block", "dns")
@@ -372,6 +433,8 @@ object SubscriptionParser {
         val type = obj.str("type") ?: throw IllegalArgumentException("缺少 type")
         val protocol = ProxyProtocol.fromSingBoxType(type)
             ?: throw IllegalArgumentException("不支持的类型：$type")
+        if (protocol == ProxyProtocol.WIREGUARD) return singBoxWireGuardToProfile(obj, groupId)
+
         val server = obj.str("server") ?: throw IllegalArgumentException("缺少 server")
         val port = obj.int("server_port") ?: throw IllegalArgumentException("缺少 server_port")
 
@@ -379,18 +442,35 @@ object SubscriptionParser {
             ProxyProtocol.SHADOWSOCKS -> ProtocolParams.Shadowsocks(
                 method = obj.str("method") ?: throw IllegalArgumentException("缺少 method"),
                 password = obj.str("password").orEmpty(),
+                plugin = obj.str("plugin"),
+                pluginOpts = obj.str("plugin_opts"),
             )
             ProxyProtocol.VMESS -> ProtocolParams.VMess(
                 uuid = obj.str("uuid") ?: throw IllegalArgumentException("缺少 uuid"),
                 security = obj.str("security") ?: "auto",
                 alterId = obj.int("alter_id") ?: 0,
+                globalPadding = obj.bool("global_padding") ?: false,
+                authenticatedLength = obj.bool("authenticated_length") ?: false,
+                packetEncoding = obj.str("packet_encoding"),
             )
             ProxyProtocol.VLESS -> ProtocolParams.VLess(
                 uuid = obj.str("uuid") ?: throw IllegalArgumentException("缺少 uuid"),
                 flow = obj.str("flow"),
+                packetEncoding = obj.str("packet_encoding"),
             )
             ProxyProtocol.TROJAN -> ProtocolParams.Trojan(
                 password = obj.str("password") ?: throw IllegalArgumentException("缺少 password"),
+            )
+            ProxyProtocol.HYSTERIA -> ProtocolParams.Hysteria(
+                authString = obj.str("auth_str"),
+                authBase64 = obj.str("auth"),
+                up = obj.str("up"),
+                down = obj.str("down"),
+                upMbps = obj.int("up_mbps"),
+                downMbps = obj.int("down_mbps"),
+                obfs = obj.str("obfs"),
+                serverPorts = obj.stringListAt("server_ports"),
+                hopInterval = obj.str("hop_interval"),
             )
             ProxyProtocol.HYSTERIA2 -> ProtocolParams.Hysteria2(
                 password = obj.str("password") ?: throw IllegalArgumentException("缺少 password"),
@@ -398,24 +478,48 @@ object SubscriptionParser {
                 downMbps = obj.int("down_mbps"),
                 obfsType = obj.objectAt("obfs")?.str("type"),
                 obfsPassword = obj.objectAt("obfs")?.str("password"),
+                serverPorts = obj.stringListAt("server_ports"),
+                hopInterval = obj.str("hop_interval"),
+                brutalDebug = obj.bool("brutal_debug") ?: false,
             )
             ProxyProtocol.TUIC -> ProtocolParams.Tuic(
                 uuid = obj.str("uuid") ?: throw IllegalArgumentException("缺少 uuid"),
                 password = obj.str("password").orEmpty(),
                 congestionControl = obj.str("congestion_control") ?: "cubic",
                 udpRelayMode = obj.str("udp_relay_mode") ?: "native",
+                udpOverStream = obj.bool("udp_over_stream") ?: false,
+                zeroRttHandshake = obj.bool("zero_rtt_handshake") ?: false,
+                heartbeat = obj.str("heartbeat"),
             )
             ProxyProtocol.ANYTLS -> ProtocolParams.AnyTls(
                 password = obj.str("password") ?: throw IllegalArgumentException("缺少 password"),
+                idleSessionCheckInterval = obj.str("idle_session_check_interval"),
+                idleSessionTimeout = obj.str("idle_session_timeout"),
+                minIdleSession = obj.int("min_idle_session"),
+            )
+            ProxyProtocol.SHADOWTLS -> ProtocolParams.ShadowTls(
+                version = obj.int("version") ?: 1,
+                password = obj.str("password"),
+            )
+            ProxyProtocol.SSH -> ProtocolParams.Ssh(
+                user = obj.str("user") ?: throw IllegalArgumentException("缺少 user"),
+                password = obj.str("password"),
+                privateKey = obj.stringListAt("private_key").firstOrNull(),
+                privateKeyPassphrase = obj.str("private_key_passphrase"),
+                hostKey = obj.stringListAt("host_key"),
+                hostKeyAlgorithms = obj.stringListAt("host_key_algorithms"),
+                clientVersion = obj.str("client_version"),
             )
             ProxyProtocol.SOCKS -> ProtocolParams.Socks(
                 version = obj.str("version") ?: "5",
                 username = obj.str("username"),
                 password = obj.str("password"),
+                udpOverTcp = obj.bool("udp_over_tcp") ?: false,
             )
             ProxyProtocol.HTTP -> ProtocolParams.Http(
                 username = obj.str("username"),
                 password = obj.str("password"),
+                path = obj.str("path"),
             )
             else -> throw IllegalArgumentException("暂不支持导入 $type")
         }
@@ -428,6 +532,8 @@ object SubscriptionParser {
                 serverName = tlsObj.str("server_name"),
                 insecure = tlsObj.bool("insecure") ?: false,
                 alpn = tlsObj.stringListAt("alpn"),
+                minVersion = tlsObj.str("min_version"),
+                maxVersion = tlsObj.str("max_version"),
                 utls = tlsObj.objectAt("utls")?.str("fingerprint")?.let { UtlsConfig(fingerprint = it) },
                 reality = realityObj?.str("public_key")?.let {
                     RealityConfig(publicKey = it, shortId = realityObj.str("short_id").orEmpty())
@@ -439,12 +545,53 @@ object SubscriptionParser {
 
         val transport = obj.objectAt("transport")?.let { t ->
             when (t.str("type")) {
-                "ws" -> TransportConfig.WebSocket(path = t.str("path") ?: "/")
-                "grpc" -> TransportConfig.Grpc(serviceName = t.str("service_name") ?: "")
-                "httpupgrade" -> TransportConfig.HttpUpgrade(path = t.str("path") ?: "/")
-                "http" -> TransportConfig.Http(path = t.str("path") ?: "/")
+                "ws" -> TransportConfig.WebSocket(
+                    path = t.str("path") ?: "/",
+                    headers = t.headerMapAt("headers"),
+                    maxEarlyData = t.int("max_early_data") ?: 0,
+                    earlyDataHeaderName = t.str("early_data_header_name"),
+                )
+                "grpc" -> TransportConfig.Grpc(
+                    serviceName = t.str("service_name") ?: "",
+                    idleTimeout = t.str("idle_timeout"),
+                    pingTimeout = t.str("ping_timeout"),
+                    permitWithoutStream = t.bool("permit_without_stream") ?: false,
+                )
+                "httpupgrade" -> TransportConfig.HttpUpgrade(
+                    host = t.str("host"),
+                    path = t.str("path") ?: "/",
+                    headers = t.headerMapAt("headers"),
+                )
+                "http" -> TransportConfig.Http(
+                    host = t.stringListAt("host"),
+                    path = t.str("path") ?: "/",
+                    method = t.str("method"),
+                    headers = t.headerMapAt("headers"),
+                )
+                "quic" -> TransportConfig.Quic
                 else -> null
             }
+        }
+
+        val muxObj = obj.objectAt("multiplex")
+        val multiplex = if (muxObj?.bool("enabled") == true) {
+            val brutalObj = muxObj.objectAt("brutal")
+            MultiplexConfig(
+                enabled = true,
+                protocol = muxObj.str("protocol") ?: "h2mux",
+                maxConnections = muxObj.int("max_connections"),
+                minStreams = muxObj.int("min_streams"),
+                maxStreams = muxObj.int("max_streams"),
+                padding = muxObj.bool("padding") ?: false,
+                brutal = brutalObj?.takeIf { it.bool("enabled") == true }?.let {
+                    BrutalConfig(
+                        upMbps = it.int("up_mbps") ?: 0,
+                        downMbps = it.int("down_mbps") ?: 0,
+                    )
+                },
+            )
+        } else {
+            null
         }
 
         val now = System.currentTimeMillis()
@@ -458,7 +605,49 @@ object SubscriptionParser {
             params = params,
             // QUIC 系协议自带传输层，硬塞一个 transport 会让这个出站被内核判为非法
             transport = transport.takeIf { protocol.supportsTransport },
-            tls = tls,
+            tls = tls.takeIf { protocol.supportsTls },
+            multiplex = multiplex.takeIf { protocol.supportsMultiplex },
+            createdAt = now,
+            updatedAt = now,
+        )
+    }
+
+    /**
+     * WireGuard 两种写法都要认：1.13 的 endpoint（`address` + `peers`）和
+     * 已被移除、但仍大量存在于旧配置里的 outbound（`local_address` +
+     * `peer_public_key`）。后者是导入的主要来源 —— 用户手上的配置多半是
+     * 一两年前生成的。
+     */
+    private fun singBoxWireGuardToProfile(obj: JsonObject, groupId: String): ServerProfile {
+        val peer = (obj["peers"] as? JsonArray)?.filterIsInstance<JsonObject>()?.firstOrNull()
+        val server = peer?.str("address") ?: obj.str("server")
+            ?: throw IllegalArgumentException("缺少 WireGuard 对端地址")
+        val port = peer?.int("port") ?: obj.int("server_port")
+            ?: throw IllegalArgumentException("缺少 WireGuard 对端端口")
+        val publicKey = peer?.str("public_key") ?: obj.str("peer_public_key")
+            ?: throw IllegalArgumentException("缺少 WireGuard 对端公钥")
+        val address = obj.stringListAt("address").ifEmpty { obj.stringListAt("local_address") }
+        require(address.isNotEmpty()) { "缺少 WireGuard 本地地址" }
+
+        val now = System.currentTimeMillis()
+        return ServerProfile(
+            id = UUID.randomUUID().toString(),
+            groupId = groupId,
+            name = obj.str("tag") ?: "$server:$port",
+            protocol = ProxyProtocol.WIREGUARD,
+            server = server,
+            serverPort = port,
+            params = ProtocolParams.WireGuard(
+                privateKey = obj.str("private_key")
+                    ?: throw IllegalArgumentException("缺少 WireGuard 私钥"),
+                peerPublicKey = publicKey,
+                preSharedKey = peer?.str("pre_shared_key") ?: obj.str("pre_shared_key"),
+                localAddress = address.map(::asCidrPrefix),
+                allowedIps = peer?.stringListAt("allowed_ips").orEmpty().map(::asCidrPrefix),
+                reserved = anyToIntList(peer?.get("reserved") ?: obj["reserved"]),
+                mtu = obj.int("mtu"),
+                persistentKeepaliveInterval = peer?.int("persistent_keepalive_interval"),
+            ),
             createdAt = now,
             updatedAt = now,
         )
@@ -473,7 +662,7 @@ object SubscriptionParser {
             ?: throw IllegalArgumentException("JSON 中没有 servers 段")
 
         val nodes = mutableListOf<ServerProfile>()
-        val failures = mutableListOf<String>()
+        val failures = mutableListOf<ParseFailure>()
         servers.forEach { element ->
             val entry = element as? JsonObject ?: return@forEach
             runCatching {
@@ -499,7 +688,9 @@ object SubscriptionParser {
                 )
             }.fold(
                 onSuccess = { nodes += it },
-                onFailure = { failures += (entry.str("remarks") ?: "未命名节点") },
+                onFailure = {
+                    failures += ParseFailure.of(entry.str("remarks") ?: "未命名节点", it)
+                },
             )
         }
         return SubscriptionResult(SubscriptionFormat.SIP008, nodes, failures)
@@ -509,7 +700,8 @@ object SubscriptionParser {
 
     private val TRUTHY = setOf("true", "1", "yes", "on")
 
-    private val ALWAYS_TLS_TYPES = setOf("trojan", "hysteria2", "hy2", "tuic", "anytls")
+    private val ALWAYS_TLS_TYPES =
+        setOf("trojan", "hysteria", "hysteria2", "hy2", "tuic", "anytls")
 
     /** SnakeYAML 默认只允许 3 MB，放宽到能容下上千节点的机场配置。 */
     private const val YAML_CODE_POINT_LIMIT = 64 * 1024 * 1024
@@ -552,6 +744,38 @@ private fun anyToStringList(value: Any?): List<String> = when (value) {
     is List<*> -> value.mapNotNull { it?.toString()?.trim()?.takeIf(String::isNotEmpty) }
     else -> value.toString().split(',').map(String::trim).filter(String::isNotEmpty)
 }
+
+/**
+ * WireGuard 的 `reserved`。
+ *
+ * YAML 里是 `[209, 98, 59]`，JSON 里同样；但也有面板把它写成 `"209,98,59"`
+ * 甚至一段 Base64。这里只认前两种，认不出来就当没写 —— reserved 填错会让
+ * 握手一直失败，而空着至少在非 WARP 的服务端上是正确的。
+ */
+private fun anyToIntList(value: Any?): List<Int> = when (value) {
+    null -> emptyList()
+    is JsonArray -> value.mapNotNull { (it as? JsonPrimitive)?.contentOrNull?.trim()?.toIntOrNull() }
+    is List<*> -> value.mapNotNull { it?.toString()?.trim()?.toIntOrNull() }
+    is JsonPrimitive -> value.contentOrNull.splitCsvInts()
+    else -> value.toString().splitCsvInts()
+}
+
+private fun String?.splitCsvInts(): List<Int> =
+    this?.split(',')?.mapNotNull { it.trim().toIntOrNull() }.orEmpty()
+
+/** sing-box 的 `headers` 是 `map[string]Listable[string]`，多值时取第一个。 */
+private fun JsonObject.headerMapAt(key: String): Map<String, String> =
+    (this[key] as? JsonObject)
+        ?.mapNotNull { (name, value) ->
+            val text = when (value) {
+                is JsonPrimitive -> value.contentOrNull
+                is JsonArray -> (value.firstOrNull() as? JsonPrimitive)?.contentOrNull
+                else -> null
+            }
+            text?.takeIf { it.isNotEmpty() }?.let { name to it }
+        }
+        ?.toMap()
+        .orEmpty()
 
 private fun headerMap(value: Any?): Map<String, String> =
     (value as? Map<*, *>)
