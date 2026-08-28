@@ -45,9 +45,7 @@ class SubscriptionRepository @Inject constructor(
             remarksFilter = remarksFilter,
             extraHeaders = extraHeaders,
         )
-        val result = pull(group)
-        result.onSuccess { serverRepository.saveGroup(it.second) }
-        result.map { it.first }
+        pull(group).mapCatching { commit(it) }
     }
 
     /** 刷新一个已有订阅。失败会写入 lastError 供 UI 展示，但保留原有节点。 */
@@ -59,15 +57,15 @@ class SubscriptionRepository @Inject constructor(
         }
 
         pull(group).fold(
-            onSuccess = { (outcome, updated) ->
-                serverRepository.saveGroup(updated)
-                Result.success(outcome)
-            },
+            onSuccess = { fetched -> runCatching { commit(fetched) } },
             onFailure = { error ->
-                // 保留旧节点：订阅服务器临时不可用时，用户至少还能连上
-                serverRepository.saveGroup(
-                    group.copy(lastError = SubscriptionPipeline.describe(error)),
-                )
+                // 保留旧节点：订阅服务器临时不可用时，用户至少还能连上。
+                // 只写元数据，一个字段都不碰节点表。
+                runCatching {
+                    serverRepository.saveGroup(
+                        group.copy(lastError = SubscriptionPipeline.describe(error)),
+                    )
+                }
                 Result.failure(error)
             },
         )
@@ -79,30 +77,47 @@ class SubscriptionRepository @Inject constructor(
             .map { refresh(it.id) }
     }
 
-    /** 拉取 + 解析 + 过滤 + 落库，返回更新后的分组元数据。 */
-    private suspend fun pull(group: ServerGroup): Result<Pair<UpdateOutcome, ServerGroup>> {
+    /**
+     * 拉取 + 解析 + 过滤，**不落库**。
+     *
+     * 落库拆到 [commit] 是因为它必须是原子的，见那边的注释。这里只做
+     * 「有可能失败但不改变任何状态」的那一段 —— 网络、解析、过滤规则。
+     */
+    private suspend fun pull(group: ServerGroup): Result<SubscriptionPipeline.Outcome> {
         val url = group.url ?: return Result.failure(IllegalArgumentException("缺少订阅地址"))
         val headers = SubscriptionPipeline.parseExtraHeaders(group.extraHeaders)
             .getOrElse { return Result.failure(it) }
         val response = fetcher.fetch(url, group.userAgent, headers)
             .getOrElse { return Result.failure(it) }
 
-        val outcome = SubscriptionPipeline.process(
+        return SubscriptionPipeline.process(
             group = group,
             body = response.body,
             userInfoHeader = response.userInfoHeader,
             suggestedName = response.suggestedName,
-        ).getOrElse { return Result.failure(it) }
+        )
+    }
 
-        serverRepository.replaceGroupServers(group.id, outcome.nodes)
-
-        return Result.success(
-            UpdateOutcome(
-                groupName = outcome.group.name,
-                nodeCount = outcome.nodes.size,
-                failedCount = outcome.failedCount,
-                filteredCount = outcome.filteredCount,
-            ) to outcome.group,
+    /**
+     * 分组元数据与整组节点一次写完。
+     *
+     * 拆分成「先写节点、再写分组」曾经有两个后果，而且都不是理论上的：
+     *
+     * - **新增订阅根本走不通**：分组是在拉取成功之后才写的，而节点在此之前
+     *   就已经在写了 —— `servers.group_id` 上挂着指向 `server_groups` 的外键，
+     *   插第一条节点就是 `FOREIGN KEY constraint failed`。那个异常还不在
+     *   `runCatching` 里，会直接从 `addSubscription` 抛给调用方。
+     * - **刷新会留下半截状态**：节点换成了新的一批，而分组的 `last_update_at`
+     *   还停在上一次，`last_error` 也没清。下一次自动更新看到的是一个「很久
+     *   没更新过」的订阅，于是再拉一遍。
+     */
+    private suspend fun commit(outcome: SubscriptionPipeline.Outcome): UpdateOutcome {
+        serverRepository.saveGroupWithServers(outcome.group, outcome.nodes)
+        return UpdateOutcome(
+            groupName = outcome.group.name,
+            nodeCount = outcome.nodes.size,
+            failedCount = outcome.failedCount,
+            filteredCount = outcome.filteredCount,
         )
     }
 }

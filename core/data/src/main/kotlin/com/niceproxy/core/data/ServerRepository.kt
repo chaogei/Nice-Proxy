@@ -3,6 +3,7 @@ package com.niceproxy.core.data
 import com.niceproxy.core.common.Dispatcher
 import com.niceproxy.core.common.NiceDispatcher
 import com.niceproxy.core.config.share.ShareLinkParsers
+import com.niceproxy.core.database.TransactionRunner
 import com.niceproxy.core.database.dao.ServerDao
 import com.niceproxy.core.database.dao.ServerGroupDao
 import com.niceproxy.core.database.entity.toDomain
@@ -23,6 +24,7 @@ import javax.inject.Singleton
 class ServerRepository @Inject constructor(
     private val serverDao: ServerDao,
     private val groupDao: ServerGroupDao,
+    private val transactions: TransactionRunner,
     @Dispatcher(NiceDispatcher.IO) private val ioDispatcher: CoroutineDispatcher,
 ) {
 
@@ -82,7 +84,10 @@ class ServerRepository @Inject constructor(
             .filter { it.size > 1 }
             .flatMap { group -> group.sortedBy { it.createdAt }.drop(1) }
 
-        removable.forEach { serverDao.deleteById(it.id) }
+        // 批量删除而不是逐条：一次判重在上千节点的订阅上能删掉几百条，
+        // 逐条 deleteById 就是几百次独立事务（几百次 fsync），中途被系统
+        // 杀掉还会留下一个删了一半的列表。
+        serverDao.deleteByIds(removable.map { it.id })
         removable.size
     }
 
@@ -97,7 +102,7 @@ class ServerRepository @Inject constructor(
             .filter { groupId == null || it.groupId == groupId }
             .filter { it.latencyMs == ServerProfile.LATENCY_TIMEOUT }
 
-        removable.forEach { serverDao.deleteById(it.id) }
+        serverDao.deleteByIds(removable.map { it.id })
         removable.size
     }
 
@@ -127,7 +132,9 @@ class ServerRepository @Inject constructor(
      * 那是把内部数据模型的约束暴露给了用户。
      */
     suspend fun ensureDefaultGroup(): String = withContext(ioDispatcher) {
-        val existing = groupDao.getAll().firstOrNull { it.type == GroupType.MANUAL }
+        // 走专门的查询而不是 `getAll().firstOrNull { ... }`：后者会把每个分组的
+        // 订阅 URL 都过一遍 Keystore 解密，只为了挑出一个根本没有 URL 的手动分组。
+        val existing = groupDao.firstManual()
         if (existing != null) return@withContext existing.id
 
         val group = ServerGroup(
@@ -152,7 +159,27 @@ class ServerRepository @Inject constructor(
             ImportOutcome(imported = parsed.nodes.size, failed = parsed.failedLines.size)
         }
 
-    /** 订阅更新：整组替换。 */
+    /**
+     * 订阅更新：分组元数据与整组节点一起落库。
+     *
+     * 两件事必须在**同一个事务**里，这是这个方法存在的全部理由：
+     *
+     * - 新增订阅时分组本身还不在库里，而 `servers.group_id` 上有外键。
+     *   先写节点会直接撞上约束失败。
+     * - 刷新订阅时若节点写成功、分组元数据写失败，用户会看到一批新节点配着
+     *   一个「上次更新：三天前」的分组，下一次自动更新又会把它整个重拉一遍。
+     *
+     * 顺序同样不能反：分组先于节点。
+     */
+    suspend fun saveGroupWithServers(group: ServerGroup, servers: List<ServerProfile>) =
+        withContext(ioDispatcher) {
+            transactions.withTransaction {
+                groupDao.upsert(group.toEntity())
+                serverDao.replaceGroupServers(group.id, servers.map { it.toEntity() })
+            }
+        }
+
+    /** 订阅更新：整组替换，不动分组元数据。 */
     suspend fun replaceGroupServers(groupId: String, servers: List<ServerProfile>) =
         withContext(ioDispatcher) {
             serverDao.replaceGroupServers(groupId, servers.map { it.toEntity() })
