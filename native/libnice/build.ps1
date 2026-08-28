@@ -9,12 +9,17 @@
       启用  with_quic              Hysteria2 / TUIC / HTTP3 必需
             with_utls              REALITY 与 TLS 指纹伪装必需
             with_wireguard         WireGuard 出站
+            with_gvisor            WireGuard 端点靠 gVisor 的用户态网络栈跑，不只是 TUN
+                                   需要它。缺了它内核会在装配期直接拒绝整份配置：
+                                   `create WireGuard device: gVisor is not included
+                                   in this build`。这是体积代价最大的一个标签，但
+                                   WireGuard 没有它就是不可用的 —— 端点的 system
+                                   模式要占用真实网络接口，VpnService 下走不通。
             with_clash_api         Kotlin 侧获取流量/连接/日志与切换节点的唯一通道
             badlinkname            sing-box 依赖 go:linkname，缺失会链接失败
             tfogo_checklinkname0   同上，tfo-go 需要
 
-      禁用  with_gvisor            仅 TUN 需要。本应用不做 TUN，这是体积削减最大的一项
-            with_naive_outbound    用不到，且要求 API 23+
+      禁用  with_naive_outbound    用不到，且要求 API 23+
             with_tailscale         用不到
             with_ech               1.13 起 ECH 已迁移到标准库，该标签被废弃，
                                    显式传入会直接触发编译错误
@@ -22,7 +27,7 @@
                                    体积更小，更适合移动端
             with_dhcp              官方仅在 Apple 平台启用
 
-    实测产物：arm64 单 ABI 约 10 MB，全部 LOAD 段 16 KB 对齐。
+    实测产物：arm64 单 ABI 约 11.3 MB，全部 LOAD 段 16 KB 对齐。
 
 .PARAMETER Abis
     目标 ABI，默认三个都构建。调试时可只构建 arm64 以加快速度。
@@ -91,7 +96,7 @@ try {
 
     $version = '1.13.19'
     $target = ($Abis | ForEach-Object { "android/$_" }) -join ','
-    $tags = 'with_quic,with_utls,with_wireguard,with_clash_api,badlinkname,tfogo_checklinkname0'
+    $tags = 'with_quic,with_utls,with_wireguard,with_gvisor,with_clash_api,badlinkname,tfogo_checklinkname0'
     $ldflags = @(
         "-X github.com/sagernet/sing-box/constant.Version=$version"
         '-X internal/godebug.defaultGODEBUG=multipathtcp=0'
