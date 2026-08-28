@@ -1,5 +1,6 @@
 package com.niceproxy.feature.onboarding
 
+import androidx.annotation.StringRes
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -41,8 +42,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.niceproxy.R
 import com.niceproxy.core.designsystem.component.GlassPanel
 import com.niceproxy.core.designsystem.component.GlowCircle
 import com.niceproxy.core.designsystem.component.LocalHazeState
@@ -111,13 +116,13 @@ fun OnboardingScreen(onFinish: () -> Unit) {
 
                 Spacer(Modifier.height(20.dp))
                 Text(
-                    text = page.title,
+                    text = stringResource(page.titleRes),
                     style = MaterialTheme.typography.titleLarge,
                     fontWeight = FontWeight.Bold,
                 )
                 Spacer(Modifier.height(12.dp))
                 Text(
-                    text = page.body,
+                    text = stringResource(page.bodyRes),
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -136,10 +141,14 @@ fun OnboardingScreen(onFinish: () -> Unit) {
 
         Row(verticalAlignment = Alignment.CenterVertically) {
             // 「跳过」必须一直在：强迫读完三屏只会让人机械连点，反而记不住第一屏
-            TextButton(onClick = onFinish) { Text("跳过") }
+            TextButton(onClick = onFinish) { Text(stringResource(R.string.onboarding_skip)) }
             Spacer(Modifier.weight(1f))
             Button(onClick = { if (isLast) onFinish() else step++ }) {
-                Text(if (isLast) "开始使用" else "下一步")
+                Text(
+                    stringResource(
+                        if (isLast) R.string.onboarding_start else R.string.onboarding_next,
+                    ),
+                )
             }
         }
     }
@@ -152,7 +161,7 @@ private fun BatteryOptimizationAction() {
 
     if (ignoring) {
         Text(
-            text = "已关闭电池优化，这一步不用管了。",
+            text = stringResource(R.string.onboarding_battery_done),
             style = MaterialTheme.typography.bodyMedium,
             color = StatusColors.running,
         )
@@ -161,7 +170,7 @@ private fun BatteryOptimizationAction() {
             onClick = { KeepAlive.requestIgnoreBatteryOptimizations(context) },
             modifier = Modifier.fillMaxWidth(),
         ) {
-            Text("去关闭电池优化")
+            Text(stringResource(R.string.onboarding_battery_action))
         }
     }
 }
@@ -186,8 +195,7 @@ private fun VendorAutoStartAction() {
 
     Spacer(Modifier.height(12.dp))
     Text(
-        text = "你的手机还有一套厂商自己的后台限制，和上面的电池优化是两回事，" +
-            "两个都要开才管用。",
+        text = stringResource(R.string.onboarding_autostart_body),
         style = MaterialTheme.typography.bodyMedium,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
@@ -196,14 +204,19 @@ private fun VendorAutoStartAction() {
         onClick = { KeepAlive.openAutoStartSettings(context) },
         modifier = Modifier.fillMaxWidth(),
     ) {
-        Text("去允许自启动")
+        Text(stringResource(R.string.onboarding_autostart_action))
     }
 }
 
 @Composable
 private fun StepDots(current: Int, total: Int) {
+    // 这些点是纯装饰性的 Box，读屏软件在这里什么都不会念 —— 于是「还有几屏」
+    // 这个信息只有看得见的人拿得到，而「下一步」按钮又不说自己会走到哪。
+    val progress = stringResource(R.string.onboarding_step, current + 1, total)
     Row(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .semantics(mergeDescendants = true) { contentDescription = progress },
         horizontalArrangement = Arrangement.Center,
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -228,32 +241,22 @@ private fun StepDots(current: Int, total: Int) {
 
 private enum class OnboardingPage(
     val icon: ImageVector,
-    val title: String,
-    val body: String,
+    @StringRes val titleRes: Int,
+    @StringRes val bodyRes: Int,
 ) {
     WHAT_IT_IS(
         icon = Icons.Outlined.Devices,
-        title = "它代理的是别的设备",
-        body = "Nice Proxy 在这台手机上开一个代理端口，供 Switch、PS5、电视盒子、" +
-            "公司电脑这类装不了代理软件的设备使用。\n\n" +
-            "它不申请 VPN 权限，因此不会代理这台手机自己的 App。" +
-            "装好之后用手机浏览器测试，看到的仍然是没走代理 —— 这是正常的，不是坏了。",
+        titleRes = R.string.onboarding_what_title,
+        bodyRes = R.string.onboarding_what_body,
     ),
     HOW_TO_CONNECT(
         icon = Icons.Outlined.Wifi,
-        title = "在另一台设备上怎么填",
-        body = "1. 让手机和那台设备连同一个 Wi-Fi，或者直接开手机热点让它连过来。\n\n" +
-            "2. 回到首页的「在其他设备上填写」，把任意一个地址填进电脑或游戏机的" +
-            "代理设置里 —— 卡片右侧就是复制按钮。\n\n" +
-            "3. 代理类型选 HTTP 或 SOCKS5 都可以，默认入站两种都收。\n\n" +
-            "换了网络之后地址会变，记得回首页重新抄一次。",
+        titleRes = R.string.onboarding_connect_title,
+        bodyRes = R.string.onboarding_connect_body,
     ),
     BATTERY(
         icon = Icons.Outlined.BatteryAlert,
-        title = "别让系统把它冻住",
-        body = "代理跑在前台服务里。息屏一段时间后，系统的电池优化会冻结它 —— " +
-            "表现是所有指过来的设备一起断网，而手机这边看不出任何异常。\n\n" +
-            "这一步是保活里最关键的，跳过的话后面多半会遇到「用着用着就断」。" +
-            "之后也能在「更多 → 设置 → 后台保活」里改。",
+        titleRes = R.string.onboarding_battery_title,
+        bodyRes = R.string.onboarding_battery_body,
     ),
 }
