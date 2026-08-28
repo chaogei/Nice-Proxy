@@ -1,6 +1,7 @@
 package com.niceproxy
 
 import android.Manifest
+import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
@@ -8,8 +9,14 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.runtime.getValue
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
+import com.niceproxy.appearance.AppearancePreferences
+import com.niceproxy.appearance.AppearanceStore
+import com.niceproxy.appearance.ThemeMode
 import com.niceproxy.core.datastore.SettingsDataStore
 import com.niceproxy.core.designsystem.theme.NiceProxyTheme
 import com.niceproxy.core.service.ProxyServiceController
@@ -28,9 +35,29 @@ class MainActivity : ComponentActivity() {
     @Inject lateinit var controller: ProxyServiceController
     @Inject lateinit var shortcuts: ProxyShortcuts
     @Inject lateinit var settings: SettingsDataStore
+    @Inject lateinit var appearance: AppearancePreferences
 
     private val requestNotificationPermission =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
+
+    /**
+     * 语言必须在这里生效，不能等到 `onCreate`。
+     *
+     * 到 `onCreate` 时资源已经用系统语言解析过一轮了，那时再换只能靠 `recreate()`，
+     * 用户每次冷启动都会看见界面闪一下。API 33+ 上系统自己就把语言应用好了，
+     * [AppearanceStore.wrapLocale] 会原样返回，见其注释。
+     *
+     * 这条路径早于 Hilt 注入，所以只能走 object 而不是注入进来的 [appearance]。
+     */
+    override fun attachBaseContext(newBase: Context) {
+        super.attachBaseContext(AppearanceStore.wrapLocale(newBase))
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // 用户可能刚从「系统设置 → 应用 → 语言」回来，内存里那份已经过期
+        appearance.refreshLanguage()
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -52,7 +79,14 @@ class MainActivity : ComponentActivity() {
             .launchIn(lifecycleScope)
 
         setContent {
-            NiceProxyTheme {
+            val themeMode by appearance.themeMode.collectAsStateWithLifecycle()
+            NiceProxyTheme(
+                darkTheme = when (themeMode) {
+                    ThemeMode.SYSTEM -> isSystemInDarkTheme()
+                    ThemeMode.LIGHT -> false
+                    ThemeMode.DARK -> true
+                },
+            ) {
                 NiceApp()
             }
         }

@@ -1,0 +1,297 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  English. Keep protocol and product nouns byte-identical to the Chinese file:
+  SOCKS5, HTTP, PAC, DNS, sing-box, Clash API, Wi-Fi, VPN, Hysteria2, IPv6.
+  People arrive here from v2rayNG / Every Proxy and look for those exact words.
+
+  Tone note: the Chinese copy is deliberately blunt about failure modes
+  ("your console will silently stop being proxied"). Translate that bluntness
+  rather than softening it into marketing voice — the whole point of those
+  sentences is that the user acts on them.
+-->
+<resources>
+    <string name="app_name">Nice Proxy</string>
+
+    <!-- ============================ Common ============================ -->
+    <string name="common_back">Back</string>
+    <string name="common_cancel">Cancel</string>
+    <string name="common_confirm">OK</string>
+    <string name="common_delete">Delete</string>
+    <string name="common_copy">Copy</string>
+    <string name="common_share">Share</string>
+    <string name="common_close">Close</string>
+    <string name="common_retry">Retry</string>
+
+    <!-- ============================ Home ============================ -->
+    <string name="home_title">Nice Proxy</string>
+    <string name="home_refresh_network">Refresh network info</string>
+    <string name="home_start">Start proxy</string>
+    <string name="home_stop">Stop proxy</string>
+    <string name="home_state_stopped">Stopped</string>
+    <string name="home_state_starting">Starting…</string>
+    <string name="home_state_running">Running</string>
+    <string name="home_state_stopping">Stopping…</string>
+    <string name="home_state_failed">Failed to start</string>
+    <string name="home_traffic_upload">Upload</string>
+    <string name="home_traffic_download">Download</string>
+    <string name="home_traffic_chart_label">Last minute</string>
+    <string name="home_traffic_chart_waiting">Sampling — the curve appears in a few seconds</string>
+
+    <string name="home_devices_title">Connected devices</string>
+    <string name="home_devices_count">%1$d</string>
+    <string name="home_devices_empty">No device has connected yet. Apps on this phone do not go through the proxy — that is expected. Enter one of the addresses below on another device.</string>
+    <string name="home_devices_line">%1$s · %2$d connections</string>
+    <string name="home_devices_more">%1$d more — tap to see all</string>
+
+    <string name="home_outbound_label">Outbound</string>
+    <string name="home_outbound_nodes">%1$d nodes</string>
+    <string name="home_outbound_add_hint">Add a node to proxy upstream</string>
+    <string name="home_outbound_relay_only">Direct (no node configured)</string>
+    <string name="home_outbound_auto">Fastest node, automatically</string>
+    <string name="home_outbound_direct">Direct</string>
+    <string name="home_outbound_none">None selected</string>
+
+    <string name="home_warning_battery">Battery optimisation is still on: the system may freeze the proxy after the screen has been off for a while, and every device pointing at this phone loses network. Tap to fix.</string>
+    <string name="home_warning_database_reset">Local data could not be opened and was rebuilt. Nodes, subscriptions and routing rules are gone. Tap to restore from a backup.</string>
+    <string name="home_warning_plaintext">Credential encryption is unavailable: the system keystore failed, so node passwords and inbound accounts are stored in plain text on this device. Use throwaway passwords and re-import your nodes once the system recovers.</string>
+    <string name="home_warning_no_auth">No authentication: any device on this network can use this proxy. Tap to set a username and password.</string>
+    <string name="home_warning_other_vpn">Another VPN is running and will take over outbound traffic</string>
+    <string name="home_failure_give_up">Stop and cancel auto-retry</string>
+    <string name="home_failure_detail">%1$s: %2$s</string>
+
+    <string name="home_uptime_label">Running for</string>
+    <string name="home_uptime_interruptions">recovered %1$d times</string>
+    <string name="home_duration_days">%1$dd %2$dh</string>
+    <string name="home_duration_hours">%1$dh %2$dm</string>
+    <string name="home_duration_minutes">%1$dm</string>
+
+    <string name="home_addresses_title">Enter this on your other device</string>
+    <string name="home_addresses_hint">Put any of the addresses below into the proxy settings of your PC or console. Apps on this phone are not proxied — this app only proxies other devices pointed at it.</string>
+    <string name="home_addresses_empty">No usable network interface. Connect to Wi-Fi or turn on the hotspot.</string>
+    <string name="home_copied">Copied %1$s</string>
+    <string name="home_copied_field">Copied %1$s</string>
+    <string name="home_copy_field">Copy %1$s</string>
+
+    <string name="home_credentials_title">This proxy needs credentials — enter them too</string>
+    <string name="home_credentials_username">Username</string>
+    <string name="home_credentials_password">Password</string>
+
+    <string name="home_inbounds_title">Inbound services</string>
+    <string name="home_inbound_add">Add inbound</string>
+    <string name="home_inbound_toggle">Enable %1$s inbound</string>
+    <string name="home_core_version">sing-box %1$s</string>
+
+    <!-- ============================ More ============================ -->
+    <string name="more_title">More</string>
+    <string name="more_monitor_title">Connections</string>
+    <string name="more_monitor_subtitle">See which device is reaching what</string>
+    <string name="more_logs_title">Logs</string>
+    <string name="more_logs_subtitle">Live core log, for troubleshooting</string>
+    <string name="more_settings_title">Settings</string>
+    <string name="more_settings_subtitle">Appearance, language, DNS, autostart</string>
+    <string name="more_expert_title">Expert mode</string>
+    <string name="more_expert_subtitle">Preview the sing-box config that will be sent to the core</string>
+
+    <!-- ============================ Connections ============================ -->
+    <string name="monitor_title">Connections</string>
+    <string name="monitor_summary">%1$d active · total ↑%2$s ↓%3$s</string>
+    <string name="monitor_not_running">The proxy is not running.</string>
+    <string name="monitor_empty">No active connections. Have a device on your LAN load something and it will show up here.</string>
+    <string name="monitor_stream_error">Monitoring stream disconnected (%1$s). The proxy itself may still be working. Reopen this page to retry.</string>
+    <string name="monitor_disconnect">Disconnect</string>
+    <string name="monitor_disconnect_named">Disconnect the connection to %1$s</string>
+    <string name="monitor_disconnect_all">Disconnect all</string>
+    <string name="monitor_disconnect_all_title">Disconnect all connections</string>
+    <string name="monitor_disconnect_all_message">This closes all %1$d connections. Devices mid-download will be cut off; most clients reconnect immediately.</string>
+    <string name="monitor_disconnected_count">Closed %1$d connections</string>
+    <string name="monitor_memory_label">Core memory</string>
+    <string name="monitor_memory_value">%1$s</string>
+    <string name="monitor_memory_unavailable">Reading…</string>
+    <string name="monitor_memory_hint">Resident memory as reported by sing-box. It grows with connection count and is returned to the system when the proxy stops.</string>
+    <string name="monitor_speed_title">Live throughput</string>
+    <string name="monitor_speed_peak">peak %1$s</string>
+    <string name="monitor_connection_route">%1$s → %2$s</string>
+    <string name="monitor_connection_route_with_rule">%1$s → %2$s · %3$s</string>
+    <string name="monitor_connection_traffic">↑%1$s ↓%2$s</string>
+
+    <!-- ============================ Logs ============================ -->
+    <string name="logs_title">Logs</string>
+    <string name="logs_copy_all">Copy all logs</string>
+    <string name="logs_clear">Clear</string>
+    <string name="logs_not_running">The proxy is not running. Logs start once it does.</string>
+    <string name="logs_stream_error">Log stream disconnected (%1$s). The proxy itself may still be working; go back and reopen this page to retry.</string>
+    <string name="logs_empty_copy">The log is empty, nothing to copy</string>
+    <string name="logs_copied">Copied %1$d log lines to the clipboard</string>
+    <string name="logs_clipboard_label">Nice Proxy log</string>
+
+    <!-- ============================ Routing ============================ -->
+    <string name="routing_title">Routing</string>
+    <string name="routing_add_rule">Add rule</string>
+    <string name="routing_rules_section">Rules (matched top to bottom, first hit wins)</string>
+    <string name="routing_rulesets_section">Rule sets</string>
+    <string name="routing_empty_global">Global proxy needs no rules — all traffic goes upstream.</string>
+    <string name="routing_empty">No rules yet. Pick a preset, or add one by hand.</string>
+    <string name="routing_move_up">Move up</string>
+    <string name="routing_move_down">Move down</string>
+    <string name="routing_move_top">Move to top</string>
+    <string name="routing_move_bottom">Move to bottom</string>
+    <string name="routing_rule_enabled">Enable rule “%1$s”</string>
+    <string name="routing_rule_menu">More actions for “%1$s”</string>
+    <string name="routing_locked_badge">Kept when applying a preset</string>
+    <string name="routing_lock">Keep this rule when applying a preset</string>
+    <string name="routing_unlock">Stop keeping it</string>
+    <string name="routing_unlock_title">Stop keeping “%1$s”</string>
+    <string name="routing_unlock_message">Once unlocked, this rule is deleted the next time you apply a preset.</string>
+    <string name="routing_apply_title">Apply “%1$s”</string>
+    <string name="routing_apply_message">A preset replaces the whole rule list: the %1$d unlocked rules you have now will be deleted, locked ones are kept. This cannot be undone.\n\nTo keep a hand-written rule, cancel, turn on “Kept when applying a preset” for it, then come back.</string>
+    <string name="routing_apply_confirm">Apply</string>
+    <string name="routing_delete_title">Delete rule</string>
+    <string name="routing_delete_message">“%1$s” will be deleted; this cannot be undone. Traffic that matched it will fall through to a later rule or the default outbound.</string>
+    <string name="routing_rule_summary">%1$s → %2$s</string>
+    <string name="routing_match_all">All traffic</string>
+    <string name="routing_match_ruleset">rule set %1$s</string>
+    <string name="routing_match_domain_suffix">domain suffix %1$s</string>
+    <string name="routing_match_domain">domain %1$s</string>
+    <string name="routing_match_keyword">keyword %1$s</string>
+    <string name="routing_match_ip">IP %1$s</string>
+    <string name="routing_match_source">source %1$s</string>
+    <string name="routing_match_port">port %1$s</string>
+    <string name="routing_match_private">private addresses</string>
+    <string name="routing_match_protocol">protocol %1$s</string>
+    <string name="routing_match_separator">, </string>
+    <string name="routing_action_direct">direct</string>
+    <string name="routing_action_proxy">proxy</string>
+    <string name="routing_action_reject">reject</string>
+    <string name="routing_action_hijack_dns">hijack DNS</string>
+    <string name="routing_action_sniff">sniff</string>
+    <string name="routing_action_resolve">resolve</string>
+
+    <!-- ============================ Settings ============================ -->
+    <string name="settings_title">Settings</string>
+
+    <string name="settings_group_appearance">Appearance &amp; language</string>
+    <string name="settings_theme">Theme</string>
+    <string name="settings_theme_system">System</string>
+    <string name="settings_theme_light">Light</string>
+    <string name="settings_theme_dark">Dark</string>
+    <string name="settings_language">Language</string>
+    <string name="settings_language_system">System default</string>
+    <string name="settings_language_chinese">简体中文</string>
+    <string name="settings_language_english">English</string>
+    <string name="settings_language_hint">Protocol names (SOCKS5, HTTP, PAC and so on) stay untranslated in every language.</string>
+
+    <string name="settings_group_service">Service</string>
+    <string name="settings_auto_start">Start on boot</string>
+    <string name="settings_auto_start_desc">Turn the proxy on after the device restarts</string>
+    <string name="settings_start_on_launch">Start when the app opens</string>
+    <string name="settings_start_on_launch_desc">Turn the proxy on when you launch the app</string>
+    <string name="settings_power_save">Power saving</string>
+    <string name="settings_power_save_desc">Stop automatically when the bound IP disappears from the device</string>
+    <string name="settings_keep_wifi">Keep Wi-Fi awake</string>
+    <string name="settings_keep_wifi_desc">Stops Wi-Fi power saving from dropping traffic. On Android 14 and later this only works while the screen is on — for screen-off survival rely on the battery setting below.</string>
+
+    <string name="settings_group_keepalive">Background survival</string>
+    <string name="settings_auto_restart">Restart the core after a crash</string>
+    <string name="settings_auto_restart_desc">Retry with backoff when the core exits unexpectedly or fails to start, instead of quietly staying down</string>
+    <string name="settings_pac_fallback">PAC: allow direct when the proxy is down</string>
+    <string name="settings_pac_fallback_desc">When off, clients lose network the moment the proxy dies — that is deliberate. Consoles and TV boxes never tell you “this is not going through the proxy”, and silently unproxied is far worse than offline. Turn it on only if being offline hurts more.</string>
+    <string name="settings_battery">Ignore battery optimisation</string>
+    <string name="settings_battery_granted">Disabled — the system will not freeze the proxy after the screen turns off</string>
+    <string name="settings_battery_denied">Still on: the system may freeze the proxy some time after the screen turns off, dropping every client at once</string>
+    <string name="settings_vendor">Vendor background limits</string>
+    <string name="settings_vendor_desc">Your vendor runs its own restrictions on top of the system battery settings. Without an allowlist entry, its task manager will kill the foreground service anyway.</string>
+    <string name="settings_keepalive_window">Last 7 days</string>
+    <string name="settings_keepalive_none">No interruption recorded yet. Every time the system or the core cuts the proxy off, it lands here.</string>
+    <string name="settings_keepalive_clean">No interruptions in the last 7 days.</string>
+    <string name="settings_keepalive_count">Interrupted %1$d times, all recovered automatically. Frequent interruptions mean the system is killing background apps — check that both allowlists above are on.</string>
+    <string name="settings_keepalive_latest">Last one: %1$s · %2$s</string>
+    <string name="settings_keepalive_clear">Clear history</string>
+    <string name="settings_keepalive_cleared">Keep-alive history cleared</string>
+
+    <string name="settings_group_network">Network</string>
+    <string name="settings_outbound_interface">Outbound interface</string>
+    <string name="settings_outbound_interface_desc">Which interface proxied traffic leaves through. Once pinned, it does not follow changes to the system default network.</string>
+    <string name="settings_ipv6">Enable IPv6</string>
+    <string name="settings_ipv6_desc">When off, DNS resolves IPv4 only</string>
+
+    <string name="settings_group_dns">DNS</string>
+    <string name="settings_dns_remote">DNS for proxied traffic</string>
+    <string name="settings_dns_local">DNS for direct traffic</string>
+    <string name="settings_dns_hint">udp://, tls://, https:// and quic:// are all accepted; a bare IP means udp.</string>
+
+    <string name="settings_group_storage">Storage</string>
+    <string name="settings_storage_desc">The core caches rule sets (.srs) and node selections in the app\'s private directory. sing-box owns those files, so there is no safe in-app button to wipe them — deleting them while the proxy runs leaves the core without its rule sets.</string>
+    <string name="settings_storage_open">System app storage settings</string>
+    <string name="settings_storage_open_desc">Check usage and clear the cache from the system page. Rule sets are downloaded again on the next start.</string>
+    <string name="settings_storage_unavailable">This device has no app storage settings page</string>
+
+    <string name="settings_group_backup">Backup &amp; restore</string>
+    <string name="settings_backup_desc">A backup contains node passwords and inbound credentials, so encryption is mandatory. The password applies to this file only and cannot be recovered.</string>
+    <string name="settings_backup_export">Export backup</string>
+    <string name="settings_backup_restore">Restore backup</string>
+    <string name="settings_backup_password_export">Set a backup password</string>
+    <string name="settings_backup_password_restore">Enter the backup password</string>
+    <string name="settings_backup_password">Password</string>
+    <string name="settings_backup_password_confirm">Confirm password</string>
+    <string name="settings_backup_password_min">At least %1$d characters</string>
+    <string name="settings_backup_password_mismatch">The two entries do not match</string>
+    <string name="settings_backup_password_note">The password is used for this backup file only and is not stored by the app. Forget it and the backup is unreadable.</string>
+    <string name="settings_backup_restore_note">Restoring overwrites your current nodes, inbounds and rules. This cannot be undone.</string>
+    <string name="settings_backup_pick_target">Choose where to save</string>
+    <string name="settings_backup_pick_file">Choose a backup file</string>
+    <string name="settings_backup_exported">Backup exported (encrypted)</string>
+    <string name="settings_backup_write_failed">Write failed: %1$s</string>
+    <string name="settings_backup_read_failed">Read failed: %1$s</string>
+    <string name="settings_backup_failed">Backup failed: %1$s</string>
+    <string name="settings_backup_no_target">Cannot write to the chosen location</string>
+    <string name="settings_backup_no_source">Cannot read the chosen file</string>
+    <string name="settings_backup_restore_failed">Restore failed</string>
+    <string name="settings_backup_restored">Restored %1$d nodes, %2$d inbounds and %3$d rules</string>
+
+    <string name="settings_group_about">About</string>
+    <string name="settings_about_core">Core: sing-box %1$s</string>
+    <string name="settings_about_license">Nice Proxy is open source under GPL-3.0. It does not use the VPN permission, so traffic from apps on this phone is not proxied.</string>
+
+    <!-- ============================ Expert mode ============================ -->
+    <string name="expert_title">Expert mode</string>
+    <string name="expert_subtitle">The sing-box config that will be sent to the core</string>
+    <string name="expert_readonly_notice">Read-only. This config is generated from your nodes, inbounds and routing rules. The app does not accept hand-injected JSON: that path can leave the core unable to start, with nothing on screen to show why. To change something, change it on the page it comes from.</string>
+    <string name="expert_secret_warning">This JSON contains node passwords, inbound accounts and the Clash API secret. Redact before sharing.</string>
+    <string name="expert_refresh">Regenerate</string>
+    <string name="expert_copy">Copy config</string>
+    <string name="expert_copied">Copied %1$d characters</string>
+    <string name="expert_share">Share config</string>
+    <string name="expert_share_title">Share sing-box config</string>
+    <string name="expert_share_confirm_title">Share a config containing passwords</string>
+    <string name="expert_share_confirm_message">This JSON holds your node passwords, inbound accounts and Clash API secret in plain text. Sending it to someone hands them your proxy. Continue?</string>
+    <string name="expert_share_no_target">No app on this device can receive text</string>
+    <string name="expert_fingerprint">Fingerprint %1$s</string>
+    <string name="expert_size">%1$d characters</string>
+    <string name="expert_generating">Generating…</string>
+    <string name="expert_failed_title">Config generation failed — the proxy cannot start</string>
+    <string name="expert_warnings_title">The generator skipped these; the core still starts</string>
+    <string name="expert_clipboard_label">sing-box config</string>
+
+    <!-- ============================ Inbound editor ============================ -->
+    <string name="inbound_edit_title">Edit inbound</string>
+    <string name="inbound_new_title">New inbound</string>
+    <string name="inbound_type">Type</string>
+    <string name="inbound_listen">Listen address</string>
+    <string name="inbound_listen_all">All interfaces (0.0.0.0)</string>
+    <string name="inbound_listen_loopback">This device only (127.0.0.1)</string>
+    <string name="inbound_port">Port</string>
+    <string name="inbound_port_error">Port must be between 1025 and 65535</string>
+    <string name="inbound_port_taken">Another inbound already uses this port</string>
+    <string name="inbound_auth_enable">Require username and password</string>
+    <string name="inbound_username">Username</string>
+    <string name="inbound_password">Password</string>
+    <string name="inbound_udp">Allow UDP forwarding</string>
+    <string name="inbound_enabled">Enabled</string>
+    <string name="inbound_save">Save</string>
+    <string name="inbound_delete">Delete</string>
+
+    <string name="permission_notification_rationale">Notification permission is required to show the persistent status and keep the service alive in the background</string>
+
+    <string name="shortcut_start">Start proxy</string>
+    <string name="shortcut_stop">Stop proxy</string>
+</resources>
