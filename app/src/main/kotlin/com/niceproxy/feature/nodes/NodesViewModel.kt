@@ -27,6 +27,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Semaphore
@@ -139,7 +140,7 @@ data class NodesUiState(
     val isTesting: Boolean get() = testProgress != null
 }
 
-private fun computeVisible(
+internal fun computeVisible(
     servers: List<ServerProfile>,
     groupId: String?,
     query: String,
@@ -211,7 +212,14 @@ class NodesViewModel @Inject constructor(
             isRefreshing = isRefreshing,
             coreRunning = proxyState is ProxyState.Running,
         )
-    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), NodesUiState())
+    }
+        // combine 的变换默认跑在收集方的上下文里，也就是 viewModelScope 的主线程。
+        // computeVisible 要把整份节点列表过滤再排序一遍，而批量测速期间每测完
+        // 一个节点就推两次新值（进度计数一次、延迟落库后仓库再发一次）。一份
+        // 三百节点的订阅测下来，就是六百趟全量排序全落在主线程上 —— 界面正好
+        // 在这段时间里卡住，而这恰恰是用户盯着进度条看的那段时间。
+        .flowOn(Dispatchers.Default)
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), NodesUiState())
 
     private val _message = MutableStateFlow<NodesMessage?>(null)
     val message: StateFlow<NodesMessage?> = _message.asStateFlow()
