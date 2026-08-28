@@ -100,6 +100,29 @@
     <string name="nodes_not_shareable">%1$s 没有通用的分享链接格式</string>
     <string name="nodes_group_deleted">已删除分组及其节点</string>
 
+    <!-- ============================ 扫码 ============================ -->
+    <string name="scan_title">扫描二维码</string>
+    <string name="scan_permission_hint">需要相机权限才能扫码。也可以直接从相册选一张二维码图片。</string>
+    <string name="scan_pick_from_gallery">从相册选择</string>
+    <string name="scan_no_qr_in_image">图片中没有识别到二维码</string>
+    <string name="scan_empty">扫到的内容为空</string>
+    <string name="scan_unrecognised">无法识别这个二维码的内容</string>
+    <string name="scan_subscribe_failed">订阅导入失败：%1$s</string>
+
+    <!-- 节点编辑 -->
+    <string name="node_edit_title_new">添加节点</string>
+    <string name="node_edit_title">编辑节点</string>
+    <string name="node_edit_paste_link">粘贴分享链接</string>
+    <!-- 全是协议 scheme，任何语言下都保持原样 -->
+    <string name="node_edit_supported_schemes" translatable="false">ss / vmess / vless / trojan / hysteria2 / tuic / anytls / socks / http</string>
+    <string name="node_edit_link">分享链接</string>
+    <string name="node_edit_link_unparsable">无法解析该链接</string>
+    <string name="node_edit_parse_and_save">解析并保存</string>
+    <string name="node_edit_no_manual_entry">暂不支持逐项手填：一个可用的节点还需要协议类型、加密方式与凭据，这些只有分享链接、二维码或机场订阅里才带得全。\n没有链接的话，可以回节点页用右上角的扫码或添加订阅。</string>
+    <string name="node_edit_name">名称</string>
+    <string name="node_edit_server">服务器地址</string>
+    <string name="node_edit_port">端口</string>
+
     <!-- ============================ 导航 ============================ -->
     <string name="nav_home">首页</string>
     <string name="nav_nodes">节点</string>
@@ -231,6 +254,7 @@
     <string name="routing_apply_title">套用「%1$s」</string>
     <string name="routing_apply_message">预设模式会整体替换规则列表：当前 %1$d 条未锁定的规则将被删除，已锁定的会保留。此操作不可撤销。\n\n想留下某条手写规则，可以先取消，打开那条规则的「套用模板时保留」再回来。</string>
     <string name="routing_apply_confirm">套用</string>
+    <string name="routing_applied">已套用「%1$s」</string>
     <string name="routing_delete_title">删除规则</string>
     <string name="routing_delete_message">「%1$s」将被删除，此操作不可撤销。命中它的流量会改由后面的规则或默认出站处理。</string>
     <string name="routing_rule_summary">%1$s → %2$s</string>

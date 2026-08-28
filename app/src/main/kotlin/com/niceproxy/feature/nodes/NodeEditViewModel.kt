@@ -21,13 +21,23 @@ data class NodeEditUiState(
     val protocolBadge: String? = null,
     val protocolName: String? = null,
     val linkInput: String = "",
-    val linkError: String? = null,
+    val linkError: LinkError? = null,
     val finished: Boolean = false,
 ) {
     val canSave: Boolean
         get() = name.isNotBlank() && server.isNotBlank() &&
             port.toIntOrNull()?.let { it in 1..65535 } == true
 }
+
+/**
+ * 链接解析失败。
+ *
+ * [reason] 是解析器给的原文，可能为 null（例如格式完全不认识时）。它由
+ * `core:config` 产出，本次改不到那一层，所以照原样透传；但「解析器什么都
+ * 没说」这种情况得由界面用本地化文案兜底，而 ViewModel 没有 `Context`。
+ */
+@JvmInline
+value class LinkError(val reason: String?)
 
 @HiltViewModel
 class NodeEditViewModel @Inject constructor(
@@ -83,7 +93,7 @@ class NodeEditViewModel @Inject constructor(
                 },
                 onFailure = { error ->
                     _uiState.update { state ->
-                        state.copy(linkError = error.message ?: "无法解析该链接")
+                        state.copy(linkError = LinkError(error.message))
                     }
                 },
             )

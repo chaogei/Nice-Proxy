@@ -47,11 +47,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.niceproxy.R
 import java.util.concurrent.Executors
 
 /**
@@ -70,9 +72,11 @@ fun ScanScreen(
     val lifecycleOwner = LocalLifecycleOwner.current
     val result by viewModel.result.collectAsStateWithLifecycle()
 
+    // 结果要跨一次导航送回节点页，那边只能收字符串。在这里就取好文案：
+    // 用户马上就会看到它，此刻的 Context 就是显示时的 Context。
     LaunchedEffect(result) {
         result?.let {
-            onImported(it)
+            onImported(it.resolve(context))
             onNavigateBack()
         }
     }
@@ -100,7 +104,11 @@ fun ScanScreen(
                 ?.let(QrAnalyzer::decodeBitmap)
         }.getOrNull()
 
-        if (decoded != null) onDecoded(decoded) else error = "图片中没有识别到二维码"
+        if (decoded != null) {
+            onDecoded(decoded)
+        } else {
+            error = context.getString(R.string.scan_no_qr_in_image)
+        }
     }
 
     LaunchedEffect(Unit) {
@@ -133,12 +141,12 @@ fun ScanScreen(
                 IconButton(onClick = onNavigateBack) {
                     Icon(
                         Icons.AutoMirrored.Filled.ArrowBack,
-                        contentDescription = "返回",
+                        contentDescription = stringResource(R.string.common_back),
                         tint = Color.White,
                     )
                 }
                 Text(
-                    text = "扫描二维码",
+                    text = stringResource(R.string.scan_title),
                     style = MaterialTheme.typography.titleLarge,
                     fontWeight = FontWeight.Bold,
                     color = Color.White,
@@ -156,7 +164,7 @@ fun ScanScreen(
         ) {
             if (!hasPermission) {
                 Text(
-                    text = "需要相机权限才能扫码。也可以直接从相册选一张二维码图片。",
+                    text = stringResource(R.string.scan_permission_hint),
                     style = MaterialTheme.typography.bodyMedium,
                     color = Color.White,
                 )
@@ -176,7 +184,7 @@ fun ScanScreen(
             ) {
                 Icon(Icons.Default.Image, contentDescription = null, modifier = Modifier.size(18.dp))
                 Spacer(Modifier.size(8.dp))
-                Text("从相册选择")
+                Text(stringResource(R.string.scan_pick_from_gallery))
             }
             Spacer(Modifier.height(4.dp))
         }

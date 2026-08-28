@@ -1,7 +1,9 @@
 package com.niceproxy.feature.scan
 
+import android.content.Context
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.niceproxy.R
 import com.niceproxy.core.data.ServerRepository
 import com.niceproxy.core.data.SubscriptionRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -11,14 +13,43 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
+/**
+ * 扫码之后要告诉用户的结果。
+ *
+ * 结果最终会跨过一次导航送回节点页显示，所以界面拿到之后立刻取字符串；
+ * 但 ViewModel 这边只给结构，它没有 `Context`，也不该有。
+ */
+sealed interface ScanOutcome {
+    data object Empty : ScanOutcome
+    data class Subscribed(val group: String, val nodes: Int) : ScanOutcome
+    data class SubscribeFailed(val reason: String?) : ScanOutcome
+    data object Unrecognised : ScanOutcome
+    data class Imported(val imported: Int) : ScanOutcome
+    data class PartiallyImported(val imported: Int, val failed: Int) : ScanOutcome
+
+    fun resolve(context: Context): String = when (this) {
+        Empty -> context.getString(R.string.scan_empty)
+        is Subscribed -> context.getString(R.string.nodes_subscribed, group, nodes)
+        is SubscribeFailed -> context.getString(
+            R.string.scan_subscribe_failed,
+            reason?.takeIf { it.isNotBlank() }
+                ?: context.getString(R.string.common_unknown_error),
+        )
+        Unrecognised -> context.getString(R.string.scan_unrecognised)
+        is Imported -> context.getString(R.string.nodes_imported, imported)
+        is PartiallyImported ->
+            context.getString(R.string.nodes_imported_partial, imported, failed)
+    }
+}
+
 @HiltViewModel
 class ScanViewModel @Inject constructor(
     private val serverRepository: ServerRepository,
     private val subscriptionRepository: SubscriptionRepository,
 ) : ViewModel() {
 
-    private val _result = MutableStateFlow<String?>(null)
-    val result: StateFlow<String?> = _result.asStateFlow()
+    private val _result = MutableStateFlow<ScanOutcome?>(null)
+    val result: StateFlow<ScanOutcome?> = _result.asStateFlow()
 
     private var handled = false
 
@@ -36,7 +67,7 @@ class ScanViewModel @Inject constructor(
         val text = content.trim()
         viewModelScope.launch {
             _result.value = when {
-                text.isBlank() -> "扫到的内容为空"
+                text.isBlank() -> ScanOutcome.Empty
                 looksLikeSubscription(text) -> importSubscription(text)
                 else -> importNodes(text)
             }
@@ -50,18 +81,18 @@ class ScanViewModel @Inject constructor(
         return !text.contains('#') && !text.substringAfter("://").contains('@')
     }
 
-    private suspend fun importSubscription(url: String): String =
+    private suspend fun importSubscription(url: String): ScanOutcome =
         subscriptionRepository.addSubscription(url).fold(
-            onSuccess = { "「${it.groupName}」已导入 ${it.nodeCount} 个节点" },
-            onFailure = { "订阅导入失败：${it.message}" },
+            onSuccess = { ScanOutcome.Subscribed(it.groupName, it.nodeCount) },
+            onFailure = { ScanOutcome.SubscribeFailed(it.message) },
         )
 
-    private suspend fun importNodes(text: String): String {
+    private suspend fun importNodes(text: String): ScanOutcome {
         val outcome = serverRepository.importFromText(text)
         return when {
-            outcome.imported == 0 -> "无法识别这个二维码的内容"
-            outcome.failed == 0 -> "已导入 ${outcome.imported} 个节点"
-            else -> "已导入 ${outcome.imported} 个，${outcome.failed} 个无法识别"
+            outcome.imported == 0 -> ScanOutcome.Unrecognised
+            outcome.failed == 0 -> ScanOutcome.Imported(outcome.imported)
+            else -> ScanOutcome.PartiallyImported(outcome.imported, outcome.failed)
         }
     }
 }

@@ -96,6 +96,27 @@
     <string name="nodes_not_shareable">%1$s has no common share-link format</string>
     <string name="nodes_group_deleted">Group and its nodes deleted</string>
 
+    <!-- ============================ Scanning ============================ -->
+    <string name="scan_title">Scan a QR code</string>
+    <string name="scan_permission_hint">Scanning needs camera permission. You can also pick a QR code image from the gallery instead.</string>
+    <string name="scan_pick_from_gallery">Pick from gallery</string>
+    <string name="scan_no_qr_in_image">No QR code found in that image</string>
+    <string name="scan_empty">The code was empty</string>
+    <string name="scan_unrecognised">Could not make sense of this QR code</string>
+    <string name="scan_subscribe_failed">Subscription import failed: %1$s</string>
+
+    <!-- Node editor -->
+    <string name="node_edit_title_new">Add a node</string>
+    <string name="node_edit_title">Edit node</string>
+    <string name="node_edit_paste_link">Paste a share link</string>
+    <string name="node_edit_link">Share link</string>
+    <string name="node_edit_link_unparsable">Could not parse this link</string>
+    <string name="node_edit_parse_and_save">Parse and save</string>
+    <string name="node_edit_no_manual_entry">Filling in each field by hand is not supported yet: a working node also needs its protocol, cipher and credentials, and only a share link, QR code or provider subscription carries all of those.\nWithout a link, go back to the nodes page and use scan or add-subscription in the top right.</string>
+    <string name="node_edit_name">Name</string>
+    <string name="node_edit_server">Server address</string>
+    <string name="node_edit_port">Port</string>
+
     <!-- ============================ Navigation ============================ -->
     <string name="nav_home">Home</string>
     <string name="nav_nodes">Nodes</string>
@@ -227,6 +248,7 @@
     <string name="routing_apply_title">Apply “%1$s”</string>
     <string name="routing_apply_message">A preset replaces the whole rule list: the %1$d unlocked rules you have now will be deleted, locked ones are kept. This cannot be undone.\n\nTo keep a hand-written rule, cancel, turn on “Kept when applying a preset” for it, then come back.</string>
     <string name="routing_apply_confirm">Apply</string>
+    <string name="routing_applied">Applied \"%1$s\"</string>
     <string name="routing_delete_title">Delete rule</string>
     <string name="routing_delete_message">“%1$s” will be deleted; this cannot be undone. Traffic that matched it will fall through to a later rule or the default outbound.</string>
     <string name="routing_rule_summary">%1$s → %2$s</string>

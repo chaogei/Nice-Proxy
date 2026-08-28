@@ -37,8 +37,15 @@ class RoutingViewModel @Inject constructor(
         RoutingUiState(mode = mode, rules = rules, ruleSets = ruleSets)
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), RoutingUiState())
 
-    private val _message = MutableStateFlow<String?>(null)
-    val message: StateFlow<String?> = _message.asStateFlow()
+    private val _message = MutableStateFlow<RoutingMode?>(null)
+
+    /**
+     * 刚刚套用了哪个模板，界面据此显示一条提示。
+     *
+     * 存枚举而不是拼好的句子：ViewModel 里没有 `Context`，拼出来的只能是写死
+     * 的中文，而 `RoutingMode.displayName` 本身也是 `core:model` 里的中文常量。
+     */
+    val message: StateFlow<RoutingMode?> = _message.asStateFlow()
 
     /**
      * 切换分流模式。
@@ -51,7 +58,7 @@ class RoutingViewModel @Inject constructor(
             settings.setRoutingMode(mode)
             if (mode != RoutingMode.CUSTOM) {
                 repository.applyTemplate(mode)
-                _message.value = "已套用「${mode.displayName}」"
+                _message.value = mode
             }
         }
     }
