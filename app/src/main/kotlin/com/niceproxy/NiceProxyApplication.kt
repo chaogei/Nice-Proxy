@@ -8,6 +8,7 @@ import com.niceproxy.core.common.ApplicationScope
 import com.niceproxy.core.data.InboundRepository
 import com.niceproxy.core.database.health.CredentialHealth
 import com.niceproxy.core.datastore.SettingsDataStore
+import com.niceproxy.core.model.StartReason
 import com.niceproxy.core.service.ProxyServiceController
 import com.niceproxy.core.service.work.ProxyWatchdogScheduler
 import com.niceproxy.core.service.work.SubscriptionUpdateScheduler
@@ -82,7 +83,9 @@ class NiceProxyApplication : Application(), Configuration.Provider {
             if (!settings.shouldBeRunning.first()) return@launch
             if (controller.state.value.isActive) return@launch
             watchdogScheduler.ensureScheduled()
-            runCatching { controller.start() }
+            // 走到这一步说明前面几层都没兜住 —— 这是保活链条里最差的一档，
+            // 单独标出来才看得出「用户每次得自己打开应用才恢复」这种模式
+            runCatching { controller.start(StartReason.COLD_START) }
                 .onFailure { Log.w(TAG, "冷启动补拉代理失败", it) }
         }
     }

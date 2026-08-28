@@ -6,6 +6,7 @@ import android.util.Log
 import androidx.core.content.ContextCompat
 import com.niceproxy.core.common.ApplicationScope
 import com.niceproxy.core.datastore.SettingsDataStore
+import com.niceproxy.core.model.StartReason
 import com.niceproxy.core.service.work.ProxyWatchdogScheduler
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CoroutineScope
@@ -58,10 +59,17 @@ class ProxyServiceController @Inject constructor(
      */
     val configMessage: StateFlow<String?> = _configMessage.asStateFlow()
 
-    fun start() {
+    /**
+     * @param reason 谁发起的这次启动。它不影响启动逻辑，只用于记账 ——
+     *        「被杀之后自动恢复」和「用户自己点的」在服务眼里长得一模一样，
+     *        不带上这个标签就永远分不出保活到底有没有在起作用。
+     */
+    fun start(reason: StartReason = StartReason.USER) {
         ContextCompat.startForegroundService(
             context,
-            Intent(context, ProxyService::class.java).setAction(ProxyService.ACTION_START),
+            Intent(context, ProxyService::class.java)
+                .setAction(ProxyService.ACTION_START)
+                .putExtra(ProxyService.EXTRA_START_REASON, reason.name),
         )
     }
 

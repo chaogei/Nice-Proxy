@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
@@ -59,11 +60,13 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import com.niceproxy.core.data.BackupRepository
 import com.niceproxy.core.data.InboundRepository
+import com.niceproxy.core.datastore.KeepAliveJournal
 import com.niceproxy.core.datastore.SettingsDataStore
 import com.niceproxy.core.designsystem.component.GlassPanel
 import com.niceproxy.core.designsystem.component.LocalHazeState
 import com.niceproxy.core.model.DnsSettings
 import com.niceproxy.core.model.InboundType
+import com.niceproxy.core.model.KeepAliveStats
 import com.niceproxy.core.model.NetworkPreference
 import com.niceproxy.core.model.ServiceSettings
 import com.niceproxy.core.service.core.NiceCore
@@ -89,6 +92,7 @@ data class SettingsUiState(
     val coreVersion: String = "",
     /** 没配 PAC 入站的人不该看到 PAC 相关的开关。 */
     val hasPacInbound: Boolean = false,
+    val keepAlive: KeepAliveStats = KeepAliveStats(),
 )
 
 @HiltViewModel
@@ -96,6 +100,7 @@ class SettingsViewModel @Inject constructor(
     private val settings: SettingsDataStore,
     private val backupRepository: BackupRepository,
     private val inboundRepository: InboundRepository,
+    private val journal: KeepAliveJournal,
     @ApplicationContext private val context: Context,
     core: NiceCore,
 ) : ViewModel() {
@@ -166,12 +171,14 @@ class SettingsViewModel @Inject constructor(
         settings.serviceSettings,
         settings.dnsSettings,
         inboundRepository.inbounds,
-    ) { service, dns, inbounds ->
+        journal.stats,
+    ) { service, dns, inbounds, keepAlive ->
         SettingsUiState(
             service = service,
             dns = dns,
             coreVersion = version,
             hasPacInbound = inbounds.any { it.enabled && it.type == InboundType.PAC },
+            keepAlive = keepAlive,
         )
     }.stateIn(
         viewModelScope,
@@ -185,6 +192,13 @@ class SettingsViewModel @Inject constructor(
     fun setKeepWifiAwake(value: Boolean) = update { it.copy(keepWifiAwake = value) }
     fun setAutoRestart(value: Boolean) = update { it.copy(autoRestartOnFailure = value) }
     fun setPacDirectFallback(value: Boolean) = update { it.copy(pacDirectFallback = value) }
+
+    fun clearKeepAliveHistory() {
+        viewModelScope.launch {
+            journal.clearHistory()
+            _message.value = "已清空保活记录"
+        }
+    }
     fun setIpv6(value: Boolean) = update { it.copy(ipv6Enabled = value) }
     fun setNetworkPreference(value: NetworkPreference) = update { it.copy(networkPreference = value) }
 
@@ -359,6 +373,10 @@ fun SettingsScreen(
                     onClick = { KeepAlive.openAutoStartSettings(context) },
                 )
             }
+            KeepAliveHistory(
+                stats = state.keepAlive,
+                onClear = viewModel::clearKeepAliveHistory,
+            )
         }
 
         SettingsGroup("网络") {
@@ -576,6 +594,57 @@ private fun SwitchRow(
         Switch(checked = checked, onCheckedChange = onCheckedChange)
     }
 }
+
+/**
+ * 保活的实际战绩。
+ *
+ * 这一段的价值全在于它能被**证伪**：说明书里写「四层防御」谁都会写，
+ * 只有真实的中断次数能回答「在你这台手机上到底管不管用」。
+ * 一次没中断过，说明现在的设置够了；每天几次，说明该去开上面那两个白名单。
+ */
+@Composable
+private fun KeepAliveHistory(stats: KeepAliveStats, onClear: () -> Unit) {
+    val recent = stats.interruptionsWithin(HISTORY_WINDOW_MS)
+    val latest = stats.interruptions.firstOrNull()
+
+    Column(modifier = Modifier.padding(top = 12.dp)) {
+        Text(
+            text = "最近 7 天",
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(Modifier.height(4.dp))
+        Text(
+            text = when {
+                // 从没记录过和「记录过但都在 7 天前」是两回事，不能都说「没被中断」
+                stats.interruptions.isEmpty() -> "还没有记录到中断。代理每次被系统或内核打断都会记在这里。"
+                recent == 0 -> "最近 7 天没有被中断过。"
+                else -> "被中断 $recent 次，均已自动恢复。频繁中断说明系统在杀后台，" +
+                    "请确认上面两项白名单都已开启。"
+            },
+            style = MaterialTheme.typography.bodySmall,
+            color = if (recent > 0) StatusColors.connecting else MaterialTheme.colorScheme.onSurface,
+        )
+        latest?.let {
+            Spacer(Modifier.height(4.dp))
+            Text(
+                text = "最近一次：${formatTimestamp(it.atMillis)} · ${it.recovery.label}",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        if (stats.interruptions.isNotEmpty()) {
+            TextButton(onClick = onClear, modifier = Modifier.align(Alignment.End)) {
+                Text("清空记录")
+            }
+        }
+    }
+}
+
+private fun formatTimestamp(millis: Long): String =
+    SimpleDateFormat("MM-dd HH:mm", Locale.getDefault()).format(Date(millis))
+
+private const val HISTORY_WINDOW_MS = 7L * 24 * 60 * 60 * 1000
 
 /** [SwitchRow] 的「跳转」版本：右侧不是开关，而是一个把用户送去系统设置页的箭头。 */
 @Composable

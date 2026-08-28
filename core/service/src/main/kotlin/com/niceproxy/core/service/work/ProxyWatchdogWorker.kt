@@ -9,6 +9,7 @@ import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import com.niceproxy.core.datastore.SettingsDataStore
+import com.niceproxy.core.model.StartReason
 import com.niceproxy.core.service.ProxyNotifications
 import com.niceproxy.core.service.ProxyServiceController
 import dagger.assisted.Assisted
@@ -53,7 +54,7 @@ class ProxyWatchdogWorker @AssistedInject constructor(
 
         Log.i(TAG, "代理应当运行但当前未运行，尝试拉起")
         return try {
-            controller.start()
+            controller.start(StartReason.WATCHDOG)
             Result.success()
         } catch (t: Throwable) {
             // Android 12+ 后台启动前台服务会抛 ForegroundServiceStartNotAllowedException，

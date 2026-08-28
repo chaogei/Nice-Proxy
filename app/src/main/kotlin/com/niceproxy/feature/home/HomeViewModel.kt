@@ -7,6 +7,7 @@ import com.niceproxy.core.data.InboundRepository
 import com.niceproxy.core.data.ServerRepository
 import com.niceproxy.core.database.health.CredentialHealth
 import com.niceproxy.core.database.health.DatabaseHealth
+import com.niceproxy.core.datastore.KeepAliveJournal
 import com.niceproxy.core.datastore.SettingsDataStore
 import com.niceproxy.core.model.InboundAuth
 import com.niceproxy.core.model.InboundService
@@ -63,6 +64,10 @@ data class HomeUiState(
     val otherVpnActive: Boolean = false,
     val coreVersion: String = "",
     val connectedDevices: List<ConnectedDevice> = emptyList(),
+    /** 本轮连续服务的起点，null 表示没在跑。 */
+    val sessionStartedAt: Long? = null,
+    /** 本轮期间被系统或内核打断过几次，全都自动恢复了。 */
+    val interruptionsThisSession: Int = 0,
     /** Keystore 密钥失效，节点密码与入站凭据正以明文落盘。 */
     val credentialsPlaintext: Boolean = false,
     /** 数据库打不开被删库重建过，用户的节点、订阅、规则都没了。 */
@@ -118,6 +123,7 @@ class HomeViewModel @Inject constructor(
     private val networkBinder: NetworkBinder,
     private val clashApi: ClashApiClient,
     private val databaseHealth: DatabaseHealth,
+    private val journal: KeepAliveJournal,
     credentialHealth: CredentialHealth,
     core: NiceCore,
 ) : ViewModel() {
@@ -163,7 +169,8 @@ class HomeViewModel @Inject constructor(
         controller.state,
         controller.traffic,
         inboundRepository.inbounds,
-        combine(serverRepository.servers, settings.outboundSettings, ::Pair),
+        // combine 的两层都已经是 5 路上限了，这里塞成 Triple 是为了不再多套一层
+        combine(serverRepository.servers, settings.outboundSettings, journal.stats, ::Triple),
         // 这两条 health 信号在此之前没有任何生产代码读过：它们各自的注释都写着
         // 「必须能被上层看见」，而唯一能看见的地方就是首页。
         combine(
@@ -175,7 +182,7 @@ class HomeViewModel @Inject constructor(
         ) { addressList, vpnActive, devices, plaintext, dbReset ->
             LocalSignals(addressList, vpnActive, devices, plaintext, dbReset)
         },
-    ) { state, traffic, inbounds, (servers, outbound), signals ->
+    ) { state, traffic, inbounds, (servers, outbound, keepAlive), signals ->
         HomeUiState(
             proxyState = state,
             traffic = traffic,
@@ -189,6 +196,10 @@ class HomeViewModel @Inject constructor(
             connectedDevices = signals.connectedDevices,
             credentialsPlaintext = signals.credentialsPlaintext,
             databaseWasReset = signals.databaseWasReset,
+            // 只在真的在跑的时候报运行时长。停止之后 sessionStartedAt 会被清掉，
+            // 但状态流可能先到一步，那一瞬间显示「已运行 3 天」会很怪
+            sessionStartedAt = keepAlive.sessionStartedAt?.takeIf { state is ProxyState.Running },
+            interruptionsThisSession = keepAlive.interruptionsSince(keepAlive.sessionStartedAt),
         )
     }.stateIn(
         scope = viewModelScope,

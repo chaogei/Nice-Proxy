@@ -44,7 +44,9 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -63,6 +65,7 @@ import com.niceproxy.core.designsystem.component.LocalHazeState
 import com.niceproxy.core.designsystem.component.SectionTitle
 import com.niceproxy.core.designsystem.component.formatSpeed
 import com.niceproxy.core.designsystem.theme.StatusColors
+import kotlinx.coroutines.delay
 import com.niceproxy.core.model.InboundAuth
 import com.niceproxy.core.model.InboundService
 import com.niceproxy.core.service.ProxyState
@@ -198,6 +201,15 @@ fun HomeScreen(
                     FailurePanel(
                         message = failed.detail?.let { "${failed.message}：$it" } ?: failed.message,
                         onGiveUp = viewModel::stopAndForget,
+                    )
+                }
+            }
+
+            state.sessionStartedAt?.let { startedAt ->
+                item {
+                    UptimePanel(
+                        startedAt = startedAt,
+                        interruptions = state.interruptionsThisSession,
                     )
                 }
             }
@@ -646,6 +658,70 @@ private fun InboundPanel(
         }
     }
 }
+
+/**
+ * 已连续运行多久，以及期间被打断过几次。
+ *
+ * 这两个数字在此之前一个都没有，导致「保活到底行不行」是一个无法证伪的问题 ——
+ * 用户只能凭感觉说「好像不太稳」，而那种说法既没法排查也没法反驳。
+ *
+ * 有了它们，「感觉不稳」会变成「已运行 6 小时、期间自动恢复 3 次」，
+ * 后者直接指向该去开电池优化还是厂商自启动白名单。
+ */
+@Composable
+private fun UptimePanel(startedAt: Long, interruptions: Int) {
+    // 时长得自己走，否则这个数字会一直停在进入页面的那一刻。
+    // 显示精度到分钟，所以半分钟刷一次绰绰有余，不必每秒唤醒。
+    var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(startedAt) {
+        while (true) {
+            delay(UPTIME_TICK_MS)
+            now = System.currentTimeMillis()
+        }
+    }
+
+    GlassPanel(
+        hazeState = LocalHazeState.current,
+        modifier = Modifier.fillMaxWidth(),
+        contentPadding = 14.dp,
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "已连续运行",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Text(
+                    text = formatDuration(now - startedAt),
+                    style = MaterialTheme.typography.titleMedium,
+                )
+            }
+            if (interruptions > 0) {
+                Text(
+                    text = "期间自动恢复 $interruptions 次",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = StatusColors.connecting,
+                )
+            }
+        }
+    }
+}
+
+/** 分钟精度就够了：这个数字是用来看「稳不稳」的，不是秒表。 */
+private fun formatDuration(millis: Long): String {
+    val totalMinutes = (millis / 60_000L).coerceAtLeast(0)
+    val days = totalMinutes / (24 * 60)
+    val hours = (totalMinutes % (24 * 60)) / 60
+    val minutes = totalMinutes % 60
+    return when {
+        days > 0 -> "$days 天 $hours 小时"
+        hours > 0 -> "$hours 小时 $minutes 分"
+        else -> "$minutes 分"
+    }
+}
+
+private const val UPTIME_TICK_MS = 30_000L
 
 /**
  * 启动失败，附一个「别再试了」。

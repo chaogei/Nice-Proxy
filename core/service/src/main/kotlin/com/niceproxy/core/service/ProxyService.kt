@@ -14,11 +14,13 @@ import com.niceproxy.core.common.ApplicationScope
 import com.niceproxy.core.config.ConfigResult
 import com.niceproxy.core.data.ConfigRepository
 import com.niceproxy.core.data.InboundRepository
+import com.niceproxy.core.datastore.KeepAliveJournal
 import com.niceproxy.core.datastore.SettingsDataStore
 import com.niceproxy.core.model.ClashApiSettings
 import com.niceproxy.core.model.InboundService
 import com.niceproxy.core.model.InboundType
 import com.niceproxy.core.model.NetworkPreference
+import com.niceproxy.core.model.StartReason
 import com.niceproxy.core.network.clash.ClashApiClient
 import com.niceproxy.core.service.config.ConfigChangeWatcher
 import com.niceproxy.core.service.config.ConfigDigest
@@ -71,6 +73,7 @@ class ProxyService : LifecycleService() {
     @Inject lateinit var clashApi: ClashApiClient
     @Inject lateinit var pacServer: PacServer
     @Inject lateinit var watchdog: ProxyWatchdogScheduler
+    @Inject lateinit var journal: KeepAliveJournal
 
     /**
      * 用于那些**必须活过服务销毁**的工作。
@@ -118,6 +121,15 @@ class ProxyService : LifecycleService() {
     private var lastCoreStartAt = 0L
 
     /**
+     * 这一次启动是谁发起的，等启动成功后记账。
+     *
+     * 要用字段传递是因为发起点（`onStartCommand` / `reviveCore`）和记账点
+     * （`onStarted`）之间隔着好几层挂起调用，而中间那些函数没有一个需要知道来源，
+     * 一路加参数传下去只会污染签名。
+     */
+    private var pendingStartReason: StartReason? = null
+
+    /**
      * 上一次真正下发出去的通知内容。
      *
      * 通知每秒要刷好几次，而 `notify` 是一次跨进程 Binder 调用。速率读数从 1.0 KB/s
@@ -149,10 +161,10 @@ class ProxyService : LifecycleService() {
             // stopSelf()，服务只在启动中/运行中保持 started 状态 —— 所以能走到这里就说明
             // 被杀时代理确实开着，直接恢复。见 docs/DESIGN.md 风险 R-3。
             Log.i(TAG, "进程被回收后重建，恢复代理")
-            startProxy()
+            startProxy(StartReason.STICKY_RESTART)
         } else {
             when (intent.action) {
-                ACTION_START -> startProxy()
+                ACTION_START -> startProxy(readStartReason(intent))
                 ACTION_STOP -> stopProxy()
                 ACTION_RELOAD -> reapplyConfig()
                 else -> if (!controller.state.value.isActive) stopSelf()
@@ -163,8 +175,20 @@ class ProxyService : LifecycleService() {
 
     // ------------------------------------------------------------------ 启动
 
-    private fun startProxy() {
+    /**
+     * 认不出来的来源一律按「用户手动」处理，而不是按恢复。
+     *
+     * 记错方向的代价不对称：把手动启动误记成中断，会凭空制造出「你的手机在杀后台」
+     * 的假象，用户跑去折腾一堆本来就没问题的系统设置。宁可漏记也不要虚报。
+     */
+    private fun readStartReason(intent: Intent): StartReason {
+        val raw = intent.getStringExtra(EXTRA_START_REASON) ?: return StartReason.USER
+        return runCatching { StartReason.valueOf(raw) }.getOrDefault(StartReason.USER)
+    }
+
+    private fun startProxy(reason: StartReason) {
         if (controller.state.value.isActive) return
+        pendingStartReason = reason
         controller.updateState(ProxyState.Starting)
         controller.updateTraffic(TrafficSnapshot())
         if (!promoteToForeground()) {
@@ -291,6 +315,13 @@ class ProxyService : LifecycleService() {
         lastCoreStartAt = System.currentTimeMillis()
         statusOverride = null
         retryJob?.cancel()
+
+        // 记一笔。consume 掉是为了不让下一次内核重启复用同一个来源标签 ——
+        // 那会把一次中断记成两次。
+        pendingStartReason?.let { reason ->
+            pendingStartReason = null
+            journal.recordStart(reason)
+        }
 
         // 落盘运行意图。进程可能在用户毫不知情的情况下被回收，
         // 届时内存里的一切都没了，只有这一位能告诉看门狗「它本来开着」。
@@ -492,6 +523,10 @@ class ProxyService : LifecycleService() {
         if (controller.state.value !is ProxyState.Running) return
         val config = runningConfig ?: return
         if (probeCore(settings.clashApiSettings())) return
+
+        // 内核确实死了，这是一次真实中断，即便服务本身从没断过。
+        // 在重启之前记账：重启失败的话这笔更该留下。
+        pendingStartReason = StartReason.CORE_REVIVE
 
         if (coreUptime() < MIN_HEALTHY_UPTIME_MS) {
             // 起来没多久就又死了，说明不是偶发故障。交给退避，
@@ -813,6 +848,9 @@ class ProxyService : LifecycleService() {
         appScope.launch {
             runCatching { settings.setShouldBeRunning(false) }
                 .onFailure { Log.w(TAG, "运行意图写入失败", it) }
+            // 会话到此为止。中断历史不清 —— 那是跨会话的诊断依据，
+            // 用户这次关掉了，不代表他不想知道昨天被杀过几次。
+            journal.recordStop()
         }
     }
 
@@ -1025,6 +1063,9 @@ class ProxyService : LifecycleService() {
         const val ACTION_START = "com.niceproxy.action.START"
         const val ACTION_STOP = "com.niceproxy.action.STOP"
         const val ACTION_RELOAD = "com.niceproxy.action.RELOAD"
+
+        /** [StartReason] 的名字。缺失或认不出来时按用户手动处理。 */
+        const val EXTRA_START_REASON = "com.niceproxy.extra.START_REASON"
 
         private const val TAG = "ProxyService"
         private const val WAKE_LOCK_TAG = "NiceProxy::Core"

@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.Intent
 import android.util.Log
 import com.niceproxy.core.datastore.SettingsDataStore
+import com.niceproxy.core.model.StartReason
 import com.niceproxy.core.service.work.ProxyWatchdogScheduler
 import com.niceproxy.core.service.work.SubscriptionUpdateScheduler
 import dagger.hilt.android.AndroidEntryPoint
@@ -56,7 +57,8 @@ class BootReceiver : BroadcastReceiver() {
         if (settings.serviceSettings.first().autoStartOnBoot) {
             settings.setShouldBeRunning(true)
             watchdog.ensureScheduled()
-            controller.start()
+            // 设备重启不是「被杀」，用户自己配的开机自启，不该记成中断
+            controller.start(StartReason.BOOT)
         } else {
             settings.setShouldBeRunning(false)
             watchdog.cancel()
