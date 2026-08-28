@@ -9,11 +9,13 @@ import com.niceproxy.core.database.dao.InboundDao
 import com.niceproxy.core.database.dao.RoutingDao
 import com.niceproxy.core.database.dao.ServerDao
 import com.niceproxy.core.database.dao.ServerGroupDao
+import com.niceproxy.core.database.dao.TrafficDao
 import com.niceproxy.core.database.entity.InboundEntity
 import com.niceproxy.core.database.entity.RoutingRuleEntity
 import com.niceproxy.core.database.entity.RuleSetEntity
 import com.niceproxy.core.database.entity.ServerEntity
 import com.niceproxy.core.database.entity.ServerGroupEntity
+import com.niceproxy.core.database.entity.TrafficDailyEntity
 import com.niceproxy.core.model.GroupType
 import com.niceproxy.core.model.InboundType
 import com.niceproxy.core.model.ProxyProtocol
@@ -29,11 +31,17 @@ import com.niceproxy.core.model.RuleSetType
  *
  * - **新增列**：可空，或者带 `@ColumnInfo(defaultValue = ...)`。缺了默认值的
  *   NOT NULL 列自动迁移生成不出来，Room 会在编译期报错。
- * - **加表 / 加列 / 加索引**：升 `version` 并在下面的 `autoMigrations` 里补一条
- *   `@AutoMigration(from = 2, to = 3)` 即可，Room 会照着 `schemas/` 下的
- *   两份 JSON 自己生成迁移。
+ * - **加表 / 加列**：升 `version` 并补一条 `@AutoMigration(from = N, to = N+1)`
+ *   即可，Room 会照着 `schemas/` 下的两份 JSON 自己生成迁移。
+ * - **改索引**：自动迁移能生成，但生成出来的是「新建影子表 → 全量拷贝 →
+ *   `DROP TABLE` → 改名」。对 `servers` 这种装着上千条不可重建凭据的表，
+ *   那个风险不值得，手写 `DROP INDEX` / `CREATE INDEX` 即可。见
+ *   [NiceMigrations.MIGRATION_2_3]。
  * - **改列类型、改可空性、改主键、删列、改表名**：自动迁移做不到（或者会
- *   悄悄丢数据），必须手写 `Migration` 并用 `addMigrations()` 注册。
+ *   悄悄丢数据），必须手写 `Migration`。
+ * - 手写的迁移一律挂在 [NiceMigrations.ALL] 上，由 `DatabaseModule`
+ *   通过 `addMigrations()` 注册；每条都要在 `MigrationTest` 里对着导出的
+ *   schema JSON 校验，那是它唯一的安全网。
  * - `schemas/` 下每个版本的 JSON 都必须提交进仓库。缺一份，对应版本的用户
  *   就永远升不上来了。
  *
@@ -47,11 +55,12 @@ import com.niceproxy.core.model.RuleSetType
         ServerGroupEntity::class,
         RoutingRuleEntity::class,
         RuleSetEntity::class,
+        TrafficDailyEntity::class,
     ],
-    version = 2,
+    // v2 → v3 走手写的 NiceMigrations.MIGRATION_2_3，不是自动迁移：
+    // 这一版要换 servers 上的索引，而自动迁移会为此把整张表重建一遍。
+    version = 3,
     exportSchema = true,
-    // 下一次改 schema 时在这里补：
-    // autoMigrations = [AutoMigration(from = 2, to = 3)],
 )
 @TypeConverters(NiceTypeConverters::class, SecretTextConverter::class)
 abstract class NiceDatabase : RoomDatabase() {
@@ -59,6 +68,7 @@ abstract class NiceDatabase : RoomDatabase() {
     abstract fun serverDao(): ServerDao
     abstract fun serverGroupDao(): ServerGroupDao
     abstract fun routingDao(): RoutingDao
+    abstract fun trafficDao(): TrafficDao
 
     companion object {
         const val NAME = "nice-proxy.db"

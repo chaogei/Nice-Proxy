@@ -135,7 +135,17 @@ class SubscriptionRepository @Inject constructor(
     }
 
     /**
-     * 解析响应、替换组内节点、更新分组元数据。
+     * 解析响应，然后把分组元数据与整组节点**一次写完**。
+     *
+     * 落库走 [ServerRepository.saveGroupWithServers] 而不是「先写节点、再写分组」，
+     * 那种拆法曾经有两个后果，而且都不是理论上的：
+     *
+     * - **新增订阅根本走不通**：分组是在拉取成功之后才写的，而节点在此之前
+     *   就已经在写了 —— `servers.group_id` 上挂着指向 `server_groups` 的外键，
+     *   插第一条节点就是 `FOREIGN KEY constraint failed`。
+     * - **刷新会留下半截状态**：节点换成了新的一批，而分组的 `last_update_at`
+     *   还停在上一次，`last_error` 也没清。下一次自动更新看到的是一个「很久
+     *   没更新过」的订阅，于是再拉一遍。
      *
      * @param recordFailure 失败时是否把错误写回分组。刷新时要写（UI 靠它显示为什么
      *        没更新成），新增时绝不能写 —— 那会留下一个永远空的分组。
@@ -153,8 +163,7 @@ class SubscriptionRepository @Inject constructor(
             suggestedName = body.suggestedName,
         ).getOrElse { return fail(group, it, recordFailure) }
 
-        serverRepository.replaceGroupServers(group.id, outcome.nodes)
-        serverRepository.saveGroup(outcome.group)
+        serverRepository.saveGroupWithServers(outcome.group, outcome.nodes)
 
         return Result.success(
             UpdateOutcome(

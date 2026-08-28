@@ -25,7 +25,12 @@ internal class SubscriptionRefreshTest {
 
     private val groupDao = FakeServerGroupDao()
     private val serverDao = FakeServerDao(groupDao)
-    private val serverRepository = ServerRepository(serverDao, groupDao, Dispatchers.IO)
+    private val serverRepository = ServerRepository(
+        serverDao,
+        groupDao,
+        FakeTransactionRunner(listOf(groupDao, serverDao)),
+        Dispatchers.IO,
+    )
     private val fetcher = SubscriptionFetcher(Dispatchers.IO)
     private val repository = SubscriptionRepository(fetcher, serverRepository, Dispatchers.IO)
 

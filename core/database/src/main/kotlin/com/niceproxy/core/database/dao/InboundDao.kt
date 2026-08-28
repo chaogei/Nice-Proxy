@@ -35,6 +35,10 @@ interface InboundDao {
     @Query("DELETE FROM inbounds WHERE id = :id")
     suspend fun deleteById(id: String)
 
+    /** 备份恢复用。逐条 `deleteById` 是 N 次语句，而这里一条就够。 */
+    @Query("DELETE FROM inbounds")
+    suspend fun deleteAll()
+
     @Query("UPDATE inbounds SET enabled = :enabled WHERE id = :id")
     suspend fun setEnabled(id: String, enabled: Boolean)
 

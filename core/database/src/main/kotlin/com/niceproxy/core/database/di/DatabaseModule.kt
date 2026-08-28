@@ -4,6 +4,7 @@ import android.content.Context
 import android.database.sqlite.SQLiteDatabaseCorruptException
 import androidx.room.Room
 import com.niceproxy.core.database.NiceDatabase
+import com.niceproxy.core.database.NiceMigrations
 import com.niceproxy.core.database.RoomTransactionRunner
 import com.niceproxy.core.database.TransactionRunner
 import com.niceproxy.core.database.crypto.KeystoreSecretKeyProvider
@@ -13,7 +14,10 @@ import com.niceproxy.core.database.dao.InboundDao
 import com.niceproxy.core.database.dao.RoutingDao
 import com.niceproxy.core.database.dao.ServerDao
 import com.niceproxy.core.database.dao.ServerGroupDao
+import com.niceproxy.core.database.dao.TrafficDao
 import com.niceproxy.core.database.health.DatabaseHealth
+import com.niceproxy.core.database.health.ResetFlagStore
+import com.niceproxy.core.database.health.SharedPreferencesResetFlagStore
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -29,6 +33,11 @@ object DatabaseModule {
     @Singleton
     fun provideSecretCodec(keyProvider: KeystoreSecretKeyProvider): SecretCodec =
         SecretCodec(keyProvider)
+
+    @Provides
+    @Singleton
+    fun provideResetFlagStore(@ApplicationContext context: Context): ResetFlagStore =
+        SharedPreferencesResetFlagStore(context)
 
     @Provides
     @Singleton
@@ -54,6 +63,9 @@ object DatabaseModule {
         fun build(): NiceDatabase =
             Room.databaseBuilder(context, NiceDatabase::class.java, NiceDatabase.NAME)
                 .addTypeConverter(secretTextConverter)
+                // 漏挂一条就等于对应版本的用户升级时直接「找不到迁移路径」，
+                // 而下面 recreate() 对那个异常的处置是删库重建。
+                .addMigrations(*NiceMigrations.ALL)
                 .fallbackToDestructiveMigrationOnDowngrade(dropAllTables = true)
                 .build()
 
@@ -114,4 +126,7 @@ object DatabaseModule {
 
     @Provides
     fun provideRoutingDao(database: NiceDatabase): RoutingDao = database.routingDao()
+
+    @Provides
+    fun provideTrafficDao(database: NiceDatabase): TrafficDao = database.trafficDao()
 }

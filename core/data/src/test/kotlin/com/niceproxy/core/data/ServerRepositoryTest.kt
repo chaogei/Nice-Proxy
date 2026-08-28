@@ -19,7 +19,9 @@ internal class ServerRepositoryTest {
 
     private val groupDao = FakeServerGroupDao()
     private val serverDao = FakeServerDao(groupDao)
-    private val repository = ServerRepository(serverDao, groupDao, Dispatchers.Unconfined)
+    private val transactions = FakeTransactionRunner(listOf(groupDao, serverDao))
+    private val repository =
+        ServerRepository(serverDao, groupDao, transactions, Dispatchers.Unconfined)
 
     private suspend fun seed(vararg groupIds: String, nodes: List<ServerProfile>) {
         groupIds.forEach { groupDao.upsert(group(it).toEntity()) }
@@ -194,6 +196,74 @@ internal class ServerRepositoryTest {
             repository.deleteGroup("g1")
 
             assertThat(repository.getAll()).isEmpty()
+        }
+
+        @Test
+        @DisplayName("分组还不存在时也能一次把它和节点写进去")
+        fun `新分组与节点一次写入`() = runTest {
+            // 新增订阅走的就是这条路：分组是刚在内存里造出来的，
+            // 先写节点必然撞上 servers.group_id 的外键约束
+            repository.saveGroupWithServers(
+                group("new-group"),
+                listOf(node("n1", groupId = "new-group")),
+            )
+
+            assertThat(repository.getGroups().map { it.id }).containsExactly("new-group")
+            assertThat(repository.getAll().map { it.id }).containsExactly("n1")
+        }
+
+        @Test
+        @DisplayName("分组与节点在同一个事务里，节点写失败不会留下半个分组")
+        fun `分组与节点同事务`() = runTest {
+            seed("g1", nodes = listOf(node("old", groupId = "g1")))
+            serverDao.failOnUpsert = { error("磁盘写满") }
+
+            val failure = runCatching {
+                repository.saveGroupWithServers(
+                    group("g1", name = "改过的名字"),
+                    listOf(node("new", groupId = "g1")),
+                )
+            }
+
+            assertThat(failure.isFailure).isTrue()
+            assertThat(groupDao.getById("g1")!!.name).isEqualTo("g1")
+            assertThat(repository.getAll().map { it.id }).containsExactly("old")
+        }
+    }
+
+    /**
+     * 批量删除的写放大。
+     *
+     * 逐条 `deleteById` 在 SQLite 里是逐条事务：一次判重能删掉几百条，
+     * 那就是几百次 fsync，而中途被系统杀掉会留下一个删了一半的列表。
+     */
+    @Nested
+    @DisplayName("批量删除")
+    inner class BatchDeletes {
+
+        @Test
+        @DisplayName("删除几百条只发出个位数的语句")
+        fun `批量删除不逐条发语句`() = runTest {
+            groupDao.upsert(group("g1").toEntity())
+            // 全都是同一个物理节点的重复项，除第一条外都会被删
+            serverDao.upsertAll(
+                (0 until 600).map { node("dup-$it", createdAt = it.toLong()).toEntity() },
+            )
+
+            assertThat(repository.deleteDuplicates()).isEqualTo(599)
+
+            // 599 条分两块（DELETE_CHUNK = 500），也就是两条语句
+            assertThat(serverDao.deleteCount).isEqualTo(2)
+            assertThat(repository.getAll()).hasSize(1)
+        }
+
+        @Test
+        @DisplayName("一条都不用删时不发语句")
+        fun `没有可删的就不动数据库`() = runTest {
+            seed("g1", nodes = listOf(node("only")))
+
+            assertThat(repository.deleteDuplicates()).isEqualTo(0)
+            assertThat(serverDao.deleteCount).isEqualTo(0)
         }
     }
 }

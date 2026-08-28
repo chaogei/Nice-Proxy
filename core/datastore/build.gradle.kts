@@ -27,4 +27,13 @@ dependencies {
 
     implementation(libs.hilt.android)
     ksp(libs.hilt.compiler)
+
+    testImplementation(libs.junit5.jupiter)
+    testRuntimeOnly(libs.junit5.platform.launcher)
+    testImplementation(libs.truth)
+    testImplementation(libs.kotlinx.coroutines.test)
+}
+
+tasks.withType<Test>().configureEach {
+    useJUnitPlatform()
 }
