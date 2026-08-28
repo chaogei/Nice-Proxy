@@ -20,7 +20,7 @@ import java.util.concurrent.atomic.AtomicInteger
  */
 class PacServerTest {
 
-    private val server = PacServer()
+    private var server = PacServer()
     private val port = freePort()
 
     @AfterEach
@@ -164,6 +164,11 @@ class PacServerTest {
         fun concurrencyIsCapped() {
             // 没有闸门的话，200 条 Slowloris 连接就能把线程池占满。以前用的还是全 App
             // 共享的 Dispatchers.IO，症状会从 Room、DataStore 那边冒出来。
+            //
+            // 这里把每客户端份额调到全局上限之上，好让这条用例只考察全局闸门 ——
+            // 测试里所有连接都来自 127.0.0.1，默认份额会先一步把它们拦下来，
+            // 那样测到的就不是这里想测的东西了。每客户端份额另有专门的用例。
+            server = PacServer(maxPerClient = Int.MAX_VALUE)
             val cap = PacServer.MAX_CONCURRENT_CONNECTIONS
             val gate = CountDownLatch(1)
             val inFlight = AtomicInteger()
@@ -194,8 +199,148 @@ class PacServerTest {
             clients.forEach {
                 assertThat(readResponse(it).statusLine).isEqualTo("HTTP/1.1 200 OK")
             }
-            assertThat(entered.get()).isEqualTo(cap + EXCESS_CLIENTS)
+            // 用 served 而不是 entered 计数：多出来的那些请求会命中响应缓存，
+            // 根本不会再走一遍脚本生成 —— 那正是缓存该有的样子
+            assertThat(server.metrics().served).isEqualTo((cap + EXCESS_CLIENTS).toLong())
             clients.forEach { runCatching { it.close() } }
+        }
+    }
+
+    @Nested
+    @DisplayName("慢客户端隔离")
+    inner class ClientFairness {
+
+        @Test
+        @DisplayName("单个客户端最多占住自己那一份，其余槽位留给别人")
+        fun oneClientCannotStarveTheRest() {
+            // 一台被入侵的智能插座开 32 条 Slowloris 就能占满全部槽位整整十秒，
+            // 这期间局域网里其他所有设备取 PAC 全部超时 —— 表现为「家里突然集体
+            // 上不了网」，而网关进程一切正常、日志里也只有几条限流记录
+            val share = 4
+            server = PacServer(maxPerClient = share)
+            val gate = CountDownLatch(1)
+            val inFlight = AtomicInteger()
+            val peak = AtomicInteger()
+            val entered = AtomicInteger()
+
+            start {
+                val now = inFlight.incrementAndGet()
+                peak.updateAndGet { seen -> maxOf(seen, now) }
+                entered.incrementAndGet()
+                gate.await()
+                inFlight.decrementAndGet()
+                "// pac"
+            }
+
+            val clients = (1..share * 3).map { openAndSend() }
+            try {
+                awaitUntil { entered.get() >= share }
+                // 多出来的那些必须**当场**被拒，而不是排在队里等前面的慢连接
+                awaitUntil { server.metrics().clientLimited.toInt() == share * 2 }
+                Thread.sleep(SETTLE_MS)
+                assertThat(peak.get()).isAtMost(share)
+                assertThat(entered.get()).isEqualTo(share)
+            } finally {
+                gate.countDown()
+            }
+
+            val statuses = clients.map { readResponse(it).statusLine }
+            assertThat(statuses.count { it.startsWith("HTTP/1.1 200") }).isEqualTo(share)
+            // 明确回 503 而不是静默 RST：被限流的设备的主人得有办法知道发生了什么
+            assertThat(statuses.count { it.startsWith("HTTP/1.1 503") }).isEqualTo(share * 2)
+            clients.forEach { runCatching { it.close() } }
+        }
+
+        @Test
+        @DisplayName("连接结束后份额立刻归还")
+        fun slotsAreReturnedAfterEachRequest() {
+            server = PacServer(maxPerClient = 1)
+            start { "// pac" }
+
+            // 份额只有一个，但连续的请求彼此不重叠，所以每一次都该成功
+            repeat(5) {
+                assertThat(request("GET /proxy.pac HTTP/1.1", "Host: 127.0.0.1").statusLine)
+                    .isEqualTo("HTTP/1.1 200 OK")
+            }
+            assertThat(server.metrics().clientLimited).isEqualTo(0)
+        }
+    }
+
+    @Nested
+    @DisplayName("响应缓存")
+    inner class Caching {
+
+        @Test
+        @DisplayName("同一个 host 的脚本只生成一次")
+        fun reusesRenderedResponse() {
+            // 一屋子设备在刚连上 Wi-Fi 的同一瞬间来取 PAC，而这份内容只取决于主机名。
+            // 每次都重跑一遍脚本拼接加 UTF-8 编码，就是在最不该慢的时刻反复付 CPU
+            val renders = AtomicInteger()
+            start { host ->
+                renders.incrementAndGet()
+                "// pac for $host"
+            }
+
+            repeat(5) {
+                assertThat(request("GET /proxy.pac HTTP/1.1", "Host: 192.168.1.8:8090").body)
+                    .isEqualTo("// pac for 192.168.1.8")
+            }
+
+            assertThat(renders.get()).isEqualTo(1)
+            assertThat(server.metrics().cacheHits).isEqualTo(4)
+        }
+
+        @Test
+        @DisplayName("不同 host 各缓存各的，绝不会串到别的网段去")
+        fun cachesPerHost() {
+            // 设备同时挂在 Wi-Fi 和热点上时，两个网段进来的客户端必须各拿各的地址。
+            // 缓存要是不按 host 分键，其中一边会拿到一个它根本路由不到的 IP
+            start { host -> "host=$host" }
+
+            assertThat(request("GET /proxy.pac HTTP/1.1", "Host: 192.168.43.1").body)
+                .isEqualTo("host=192.168.43.1")
+            assertThat(request("GET /proxy.pac HTTP/1.1", "Host: 10.0.0.5").body)
+                .isEqualTo("host=10.0.0.5")
+            assertThat(request("GET /proxy.pac HTTP/1.1", "Host: 192.168.43.1").body)
+                .isEqualTo("host=192.168.43.1")
+        }
+
+        @Test
+        @DisplayName("重启会把缓存整个丢掉，配置变更后绝不发出旧脚本")
+        fun restartInvalidatesCache() {
+            // 客户端缓存了一份指向旧端口的 PAC 之后就一直连不上，
+            // 而界面上一切正常，因为服务确实在跑
+            start { "// first" }
+            assertThat(request("GET /proxy.pac HTTP/1.1", "Host: 127.0.0.1").body)
+                .isEqualTo("// first")
+
+            start { "// second" }
+
+            assertThat(request("GET /proxy.pac HTTP/1.1", "Host: 127.0.0.1").body)
+                .isEqualTo("// second")
+        }
+    }
+
+    @Nested
+    @DisplayName("指标")
+    inner class Observability {
+
+        @Test
+        @DisplayName("被服务、被拒绝的请求都记在账上")
+        fun countsServedAndRejected() {
+            // 没有指标的话，「局域网里有台设备在灌畸形请求」只会表现为
+            // 「有些设备偶尔上不了网」，而那个现象查不出任何原因
+            start { "// pac" }
+
+            request("GET /proxy.pac HTTP/1.1", "Host: 127.0.0.1")
+            request("POST /proxy.pac HTTP/1.1", "Host: 127.0.0.1")
+            request("GET /favicon.ico HTTP/1.1", "Host: 127.0.0.1")
+
+            val metrics = server.metrics()
+            assertThat(metrics.accepted).isEqualTo(3)
+            assertThat(metrics.served).isEqualTo(1)
+            assertThat(metrics.rejected).isEqualTo(2)
+            assertThat(metrics.cachedHosts).isEqualTo(1)
         }
     }
 

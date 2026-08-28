@@ -17,6 +17,8 @@ import java.net.ServerSocket
 import java.net.Socket
 import java.net.SocketException
 import java.util.Collections
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicLong
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -34,9 +36,17 @@ import javax.inject.Singleton
  * 全屋断网，而看门狗最长要 15 分钟才会来救。
  *
  * 见 docs/DESIGN.md §6.5。
+ *
+ * @param maxPerClient 单个客户端 IP 能同时占住的连接数。低于 [MAX_CONCURRENT_CONNECTIONS]
+ *        才有意义 —— 见 [clientSlots] 的说明。只有测试会显式传值。
  */
 @Singleton
-class PacServer @Inject constructor() {
+class PacServer internal constructor(
+    private val maxPerClient: Int,
+) {
+
+    @Inject
+    constructor() : this(DEFAULT_MAX_PER_CLIENT)
 
     /** 会被 accept 循环、请求处理协程和调用方三边读到，必须是 volatile。 */
     @Volatile
@@ -76,7 +86,42 @@ class PacServer @Inject constructor() {
     private val liveConnections: MutableSet<Socket> =
         Collections.synchronizedSet(mutableSetOf<Socket>())
 
+    /**
+     * 每个客户端 IP 当前占住的连接数。
+     *
+     * [inFlight] 那道全局闸门只保证「进程不会被撑爆」，它保证不了**公平**：一台被
+     * 入侵的智能插座开 32 条 Slowloris，就能把全部槽位占满整整十秒，这期间局域网里
+     * 其他所有设备取 PAC 全部超时 —— 表现为「家里突然集体上不了网」，而网关进程
+     * 一切正常、日志里也只有几条限流记录。压住每个 IP 的份额之后，一个客户端最多
+     * 只能占住 [maxPerClient] 个槽位，剩下的永远留给别人。
+     *
+     * 计数归零就把键删掉：不然一次全网段扫描会在这个 map 里留下 254 个常驻条目。
+     */
+    private val clientSlots = ConcurrentHashMap<String, Int>()
+
+    /**
+     * 当前这一轮监听的 PAC 响应缓存，键是脚本里要用的主机名。
+     *
+     * 缓存的是**整个响应的字节**，不只是脚本文本：PAC 的内容只取决于主机名，
+     * 而同一台设备的浏览器、系统代理设置、各类应用会在几秒内反复来取同一份。
+     * 每次都重跑一遍脚本拼接加 UTF-8 编码，纯粹是在给一个只有几百字节的静态响应
+     * 付 CPU；在 32 条并发的压力下这笔开销恰好落在最不该出现的时刻。
+     *
+     * 随 [start] 整个换掉，所以配置变更之后绝不会发出旧脚本 —— 缓存的生命周期
+     * 与那份 `resolveScript` 闭包严格一致。
+     */
+    @Volatile
+    private var responseCache: ResponseCache? = null
+
+    private val counters = Counters()
+
     val isRunning: Boolean get() = serverSocket?.isClosed == false
+
+    /** 运行期观测量。限流有没有真的在拦人、缓存有没有命中，只能从这里看出来。 */
+    fun metrics(): Metrics = counters.snapshot(
+        inFlight = MAX_CONCURRENT_CONNECTIONS - inFlight.availablePermits,
+        cachedHosts = responseCache?.size ?: 0,
+    )
 
     /**
      * @param resolveScript 由调用方按「客户端访问用的主机名」生成脚本内容。
@@ -100,7 +145,10 @@ class PacServer @Inject constructor() {
             return
         }
         serverSocket = socket
-        acceptJob = scope.launch { acceptLoop(socket, resolveScript) }
+        // 缓存与这一份 resolveScript 闭包绑定：换了配置就整个丢掉，
+        // 绝不可能有一份指向旧端口的脚本活过这次重启
+        responseCache = ResponseCache(MAX_CACHED_HOSTS, resolveScript)
+        acceptJob = scope.launch { acceptLoop(socket) }
     }
 
     /**
@@ -115,6 +163,8 @@ class PacServer @Inject constructor() {
         closeSockets()
         acceptJob?.cancelAndJoin()
         acceptJob = null
+        responseCache = null
+        clientSlots.clear()
     }
 
     private fun closeSockets() {
@@ -125,10 +175,7 @@ class PacServer @Inject constructor() {
             .forEach { runCatching { it.close() } }
     }
 
-    private suspend fun CoroutineScope.acceptLoop(
-        socket: ServerSocket,
-        resolveScript: (String) -> String,
-    ) {
+    private suspend fun CoroutineScope.acceptLoop(socket: ServerSocket) {
         var failures = 0
         while (isActive && !socket.isClosed) {
             val client = try {
@@ -141,6 +188,7 @@ class PacServer @Inject constructor() {
                 // 的）就让 PAC 永久死掉，而 serverSocket 仍非 null、isRunning 仍返回
                 // true，于是整个系统都以为它活着，用户只发现「PAC 地址打不开了」。
                 failures++
+                counters.acceptFailures.incrementAndGet()
                 if (failures > MAX_ACCEPT_FAILURES) {
                     Log.w(TAG, "PAC accept 连续失败 $failures 次，停止监听", e)
                     // 关掉它，好让 isRunning 如实变成 false，上层才有机会重建
@@ -164,9 +212,10 @@ class PacServer @Inject constructor() {
                 runCatching { client.close() }
                 throw t
             }
+            counters.accepted.incrementAndGet()
             launch {
                 try {
-                    serve(client, resolveScript)
+                    serve(client)
                 } finally {
                     inFlight.release()
                 }
@@ -174,27 +223,63 @@ class PacServer @Inject constructor() {
         }
     }
 
-    private fun serve(client: Socket, resolveScript: (String) -> String) {
+    private fun serve(client: Socket) {
         liveConnections.add(client)
+        val clientKey = client.inetAddress?.hostAddress ?: UNKNOWN_CLIENT
+        var admitted = false
         try {
             // 注册的动作与 closeSockets() 的快照之间有一瞬空隙。补这一次检查，
             // 否则挤进空隙的那条连接会让 stop() 一直等到它自己读超时才结束。
             if (serverSocket == null) return
 
-            runCatching { respond(client, resolveScript) }
+            admitted = acquireClientSlot(clientKey)
+            if (!admitted) {
+                // 明确回一个 503 而不是直接关：被限流的往往是家里某台行为异常的设备，
+                // 静默 RST 只会让它无限重试，而它的主人永远不知道发生了什么
+                counters.clientLimited.incrementAndGet()
+                runCatching {
+                    client.write(SERVICE_UNAVAILABLE)
+                    drainQuietly(client)
+                }
+                return
+            }
+
+            runCatching { respond(client) }
                 .onFailure { if (it !is IOException) Log.w(TAG, "PAC 请求处理失败", it) }
         } finally {
+            if (admitted) releaseClientSlot(clientKey)
             liveConnections.remove(client)
             runCatching { client.close() }
         }
     }
 
-    private fun respond(socket: Socket, resolveScript: (String) -> String) {
+    /** @return 拿到名额返回 true。达到上限时不占坑，直接拒。 */
+    private fun acquireClientSlot(client: String): Boolean {
+        var admitted = false
+        clientSlots.compute(client) { _, current ->
+            val used = current ?: 0
+            if (used >= maxPerClient) {
+                used
+            } else {
+                admitted = true
+                used + 1
+            }
+        }
+        return admitted
+    }
+
+    private fun releaseClientSlot(client: String) {
+        // 归零就删键，否则一次全网段扫描会在 map 里留下二百多个常驻条目
+        clientSlots.computeIfPresent(client) { _, used -> (used - 1).takeIf { it > 0 } }
+    }
+
+    private fun respond(socket: Socket) {
         val reader = BoundedRequestReader(socket, System.nanoTime() + CONNECTION_BUDGET_NANOS)
 
         val request = try {
             reader.readRequest()
         } catch (e: RequestRejectedException) {
+            counters.rejected.incrementAndGet()
             socket.write(errorResponse(e.status, e.reason))
             drainQuietly(socket)
             return
@@ -204,17 +289,36 @@ class PacServer @Inject constructor() {
         val host = request.host?.let(::stripPort)?.takeIf(PacScript::isValidHost)
             ?: localHost(socket)
 
-        val response = when {
-            request.method != "GET" -> errorResponse(405, "Method Not Allowed")
-            !request.path.startsWith(PAC_PATH) -> errorResponse(404, "Not Found")
-            else -> pacResponse(resolveScript(host))
+        when {
+            request.method != "GET" -> {
+                counters.rejected.incrementAndGet()
+                socket.write(errorResponse(405, "Method Not Allowed"))
+            }
+
+            !request.path.startsWith(PAC_PATH) -> {
+                counters.rejected.incrementAndGet()
+                socket.write(errorResponse(404, "Not Found"))
+            }
+
+            else -> {
+                // 服务已经在关停的路上时缓存已被丢掉，此刻绝不能再拿旧闭包现生成一份
+                val cache = responseCache ?: return
+                val cached = cache.get(host, counters)
+                counters.served.incrementAndGet()
+                socket.write(cached)
+            }
         }
-        socket.write(response)
     }
 
-    private fun Socket.write(response: String) {
+    /**
+     * 一次 write 写完整个响应。
+     *
+     * 不用 `BufferedOutputStream` 包一层：响应本来就是一个已经拼好的连续字节数组，
+     * 再套一层缓冲只是多一次拷贝。真正省下来的是**编码**那一步 —— 见 [ResponseCache]。
+     */
+    private fun Socket.write(response: ByteArray) {
         getOutputStream().apply {
-            write(response.toByteArray(Charsets.UTF_8))
+            write(response)
             flush()
         }
     }
@@ -263,22 +367,99 @@ class PacServer @Inject constructor() {
         return trimmed.substringBefore(':')
     }
 
-    private fun pacResponse(script: String): String {
-        val body = script.toByteArray(Charsets.UTF_8)
-        return buildString {
-            append("HTTP/1.1 200 OK\r\n")
-            // 这个 MIME 是 PAC 的事实标准，用 text/plain 会让部分系统拒绝解析
-            append("Content-Type: application/x-ns-proxy-autoconfig; charset=utf-8\r\n")
-            append("Content-Length: ${body.size}\r\n")
-            // 配置随时可能变，绝不能让客户端缓存
-            append("Cache-Control: no-store, no-cache, must-revalidate\r\n")
-            append("Connection: close\r\n\r\n")
-            append(script)
+    private fun errorResponse(code: Int, reason: String): ByteArray =
+        "HTTP/1.1 $code $reason\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+            .toByteArray(Charsets.UTF_8)
+
+    /**
+     * 按主机名缓存整个响应的字节。
+     *
+     * 同一台设备的浏览器、系统代理设置、各类应用会在几秒内反复来取同一份 PAC，
+     * 而这份内容只取决于主机名。每次都重跑一遍脚本拼接加 UTF-8 编码，就是在给一个
+     * 几百字节的静态响应反复付 CPU —— 偏偏这笔开销总是集中在「刚连上 Wi-Fi、
+     * 一屋子设备同时来取」的那一瞬，也就是最不该慢的时刻。
+     *
+     * 用 access-order 的 [LinkedHashMap] 做 LRU 并封顶：主机名来自 Host 头，虽然
+     * 已经过 [PacScript.isValidHost] 过滤，仍然是**外部可控**的输入 —— 不封顶的话，
+     * 局域网里任何一台设备只要每次换一个合法的 Host 值，就能把这张表撑到 OOM。
+     */
+    private class ResponseCache(
+        private val maxEntries: Int,
+        private val resolveScript: (String) -> String,
+    ) {
+        private val entries = object : LinkedHashMap<String, ByteArray>(16, 0.75f, true) {
+            override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, ByteArray>) =
+                size > maxEntries
+        }
+
+        val size: Int get() = synchronized(entries) { entries.size }
+
+        fun get(host: String, counters: Counters): ByteArray {
+            synchronized(entries) { entries[host] }?.let {
+                counters.cacheHits.incrementAndGet()
+                return it
+            }
+            // 生成放在锁外：resolveScript 是调用方给的闭包，把它圈进锁里就等于让
+            // 一个我们管不着的函数决定所有并发请求的排队长度。多生成一两次的代价
+            // 远小于此。
+            val response = render(resolveScript(host))
+            synchronized(entries) { entries[host] = response }
+            return response
+        }
+
+        private fun render(script: String): ByteArray {
+            val body = script.toByteArray(Charsets.UTF_8)
+            val head = buildString {
+                append("HTTP/1.1 200 OK\r\n")
+                // 这个 MIME 是 PAC 的事实标准，用 text/plain 会让部分系统拒绝解析
+                append("Content-Type: application/x-ns-proxy-autoconfig; charset=utf-8\r\n")
+                append("Content-Length: ${body.size}\r\n")
+                // 配置随时可能变，绝不能让客户端缓存
+                append("Cache-Control: no-store, no-cache, must-revalidate\r\n")
+                append("Connection: close\r\n\r\n")
+            }.toByteArray(Charsets.UTF_8)
+            return head + body
         }
     }
 
-    private fun errorResponse(code: Int, reason: String): String =
-        "HTTP/1.1 $code $reason\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+    /** 累加器与对外快照分开：前者要无锁地被几十条连接同时更新，后者只是一次读。 */
+    private class Counters {
+        val accepted = AtomicLong()
+        val served = AtomicLong()
+        val rejected = AtomicLong()
+        val clientLimited = AtomicLong()
+        val cacheHits = AtomicLong()
+        val acceptFailures = AtomicLong()
+
+        fun snapshot(inFlight: Int, cachedHosts: Int) = Metrics(
+            accepted = accepted.get(),
+            served = served.get(),
+            rejected = rejected.get(),
+            clientLimited = clientLimited.get(),
+            cacheHits = cacheHits.get(),
+            acceptFailures = acceptFailures.get(),
+            inFlight = inFlight,
+            cachedHosts = cachedHosts,
+        )
+    }
+
+    /**
+     * PAC 服务的运行期观测量。
+     *
+     * [clientLimited] 一直在涨说明局域网里有一台设备在异常地开连接；[rejected] 涨则是
+     * 有人在灌畸形请求。这两件事在没有指标的时候只会表现为「家里有些设备偶尔上不了网」，
+     * 而那个现象查不出任何原因。
+     */
+    data class Metrics(
+        val accepted: Long,
+        val served: Long,
+        val rejected: Long,
+        val clientLimited: Long,
+        val cacheHits: Long,
+        val acceptFailures: Long,
+        val inFlight: Int,
+        val cachedHosts: Int,
+    )
 
     private data class ParsedRequest(
         val method: String,
@@ -375,6 +556,11 @@ class PacServer @Inject constructor() {
         private const val LISTEN_ALL = "0.0.0.0"
         private const val LOOPBACK = "127.0.0.1"
         private const val HOST_HEADER = "host"
+        private const val UNKNOWN_CLIENT = "unknown"
+
+        private val SERVICE_UNAVAILABLE =
+            "HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                .toByteArray(Charsets.UTF_8)
         private const val CR = '\r'.code
         private const val LF = '\n'.code
 
@@ -399,6 +585,23 @@ class PacServer @Inject constructor() {
 
         /** 家里的设备数远不到这个量级，而这也是攻击者能同时占住的资源上限。 */
         internal const val MAX_CONCURRENT_CONNECTIONS = 32
+
+        /**
+         * 单个客户端 IP 的份额。
+         *
+         * 正常设备取一份 PAC 只开一条连接，浏览器加系统代理同时来也不过两三条，
+         * 八条留了充足余量。而它同时保证了「一台设备最多只能占住四分之一的槽位」——
+         * 剩下的四分之三永远留给局域网里其他设备。
+         */
+        internal const val DEFAULT_MAX_PER_CLIENT = MAX_CONCURRENT_CONNECTIONS / 4
+
+        /**
+         * 缓存的主机名数量上限。
+         *
+         * 一台设备可能同时挂在 Wi-Fi 与热点上，再加上 IPv4 / IPv6 两种字面量，
+         * 实际用到的主机名不过个位数。封顶是因为主机名来自 Host 头 —— 那是外部输入。
+         */
+        private const val MAX_CACHED_HOSTS = 16
 
         private const val MAX_ACCEPT_FAILURES = 5
         private const val ACCEPT_RETRY_DELAY_MS = 500L
