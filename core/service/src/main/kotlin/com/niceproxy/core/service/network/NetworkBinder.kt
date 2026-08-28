@@ -6,6 +6,7 @@ import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.NetworkRequest
 import com.niceproxy.core.model.NetworkPreference
+import com.niceproxy.core.network.LatencyTester
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
@@ -25,11 +26,15 @@ import javax.inject.Singleton
  * 自动生效，Go 侧一行代码都不用改。监听套接字不受影响，`0.0.0.0` 上的 listener
  * 依然接受来自所有接口的连接，热点客户端可以正常接入。
  *
+ * 进程绑定只覆盖走内核的那部分流量。**不经过内核的探测另有一条路**，
+ * 见 [OutboundNetworkSelection]。
+ *
  * 见 docs/DESIGN.md §6.7。
  */
 @Singleton
 class NetworkBinder @Inject constructor(
     @ApplicationContext private val context: Context,
+    private val latencyTester: LatencyTester,
 ) {
 
     private val connectivityManager: ConnectivityManager?
@@ -37,14 +42,20 @@ class NetworkBinder @Inject constructor(
 
     private var callback: ConnectivityManager.NetworkCallback? = null
 
+    /**
+     * 选哪张网、以及选定之后要通知谁，全在这里面。整个 binder 共用一个实例，
+     * 于是「上一轮 apply 留下的绑定」与「这一轮的选择」经过的是同一个状态机。
+     */
+    private val selection = OutboundNetworkSelection<Network>(
+        latencyTester = latencyTester,
+        socketFactoryOf = { network -> network.socketFactory },
+        bindProcess = { network -> connectivityManager?.bindProcessToNetwork(network) },
+    )
+
     fun apply(preference: NetworkPreference) {
         val manager = connectivityManager ?: return
+        // release 已经把绑定收回到系统默认，AUTO 到此为止
         release()
-
-        if (preference == NetworkPreference.AUTO) {
-            manager.bindProcessToNetwork(null)
-            return
-        }
 
         val transport = when (preference) {
             NetworkPreference.WIFI -> NetworkCapabilities.TRANSPORT_WIFI
@@ -60,12 +71,13 @@ class NetworkBinder @Inject constructor(
 
         val newCallback = object : ConnectivityManager.NetworkCallback() {
             override fun onAvailable(network: Network) {
-                manager.bindProcessToNetwork(network)
+                selection.onAvailable(network)
             }
 
             override fun onLost(network: Network) {
-                // 指定的网络断了就回落到系统默认，总比彻底断网强。
-                manager.bindProcessToNetwork(null)
+                // 掉的若是当前这张，[OutboundNetworkSelection] 会回落到另一张
+                // 仍然活着的同类网络，都没有了才回到系统默认 —— 总比彻底断网强。
+                selection.onLost(network)
             }
         }
         callback = newCallback
@@ -77,7 +89,7 @@ class NetworkBinder @Inject constructor(
         val manager = connectivityManager ?: return
         callback?.let { runCatching { manager.unregisterNetworkCallback(it) } }
         callback = null
-        manager.bindProcessToNetwork(null)
+        selection.clear()
     }
 
     /**
