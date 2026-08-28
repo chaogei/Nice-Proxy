@@ -25,11 +25,13 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.niceproxy.R
 import com.niceproxy.core.designsystem.component.GlassPanel
 import com.niceproxy.core.designsystem.component.LocalHazeState
 import com.niceproxy.core.designsystem.component.ProtocolBadge
@@ -61,10 +63,15 @@ fun NodeEditScreen(
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = onNavigateBack) {
-                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
+                Icon(
+                    Icons.AutoMirrored.Filled.ArrowBack,
+                    contentDescription = stringResource(R.string.common_back),
+                )
             }
             Text(
-                text = if (state.isNew) "添加节点" else "编辑节点",
+                text = stringResource(
+                    if (state.isNew) R.string.node_edit_title_new else R.string.node_edit_title,
+                ),
                 style = MaterialTheme.typography.headlineSmall,
                 fontWeight = FontWeight.Bold,
             )
@@ -76,20 +83,29 @@ fun NodeEditScreen(
                 modifier = Modifier.fillMaxWidth(),
                 contentPadding = 16.dp,
             ) {
-                Text("粘贴分享链接", style = MaterialTheme.typography.titleSmall)
                 Text(
-                    text = "支持 ss / vmess / vless / trojan / hysteria2 / tuic / anytls / socks / http",
+                    text = stringResource(R.string.node_edit_paste_link),
+                    style = MaterialTheme.typography.titleSmall,
+                )
+                Text(
+                    text = stringResource(R.string.node_edit_supported_schemes),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(top = 4.dp, bottom = 12.dp),
                 )
+                // 解析器的原文来自 core:config，可能是 null。那种情况下不能把
+                // 输入框的辅助文字留空 —— 边框变红却不说为什么，比不变红更糟。
+                val linkError = state.linkError?.let { error ->
+                    error.reason?.takeIf { it.isNotBlank() }
+                        ?: stringResource(R.string.node_edit_link_unparsable)
+                }
                 OutlinedTextField(
                     value = state.linkInput,
                     onValueChange = viewModel::setLink,
-                    label = { Text("分享链接") },
+                    label = { Text(stringResource(R.string.node_edit_link)) },
                     minLines = 3,
-                    isError = state.linkError != null,
-                    supportingText = state.linkError?.let { { Text(it) } },
+                    isError = linkError != null,
+                    supportingText = linkError?.let { { Text(it) } },
                     modifier = Modifier.fillMaxWidth(),
                 )
                 Button(
@@ -99,7 +115,7 @@ fun NodeEditScreen(
                         .fillMaxWidth()
                         .padding(top = 12.dp),
                 ) {
-                    Text("解析并保存")
+                    Text(stringResource(R.string.node_edit_parse_and_save))
                 }
             }
 
@@ -108,9 +124,7 @@ fun NodeEditScreen(
             // 不如说清楚为什么只收链接：ServerProfile 还需要协议类型与凭据，
             // 而那些字段只有分享链接、二维码或订阅里才带得全。
             Text(
-                text = "暂不支持逐项手填：一个可用的节点还需要协议类型、加密方式与凭据，" +
-                    "这些只有分享链接、二维码或机场订阅里才带得全。\n" +
-                    "没有链接的话，可以回节点页用右上角的扫码或添加订阅。",
+                text = stringResource(R.string.node_edit_no_manual_entry),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(start = 4.dp),
@@ -141,14 +155,14 @@ fun NodeEditScreen(
             OutlinedTextField(
                 value = state.name,
                 onValueChange = viewModel::setName,
-                label = { Text("名称") },
+                label = { Text(stringResource(R.string.node_edit_name)) },
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth(),
             )
             OutlinedTextField(
                 value = state.server,
                 onValueChange = viewModel::setServer,
-                label = { Text("服务器地址") },
+                label = { Text(stringResource(R.string.node_edit_server)) },
                 singleLine = true,
                 modifier = Modifier
                     .fillMaxWidth()
@@ -157,7 +171,7 @@ fun NodeEditScreen(
             OutlinedTextField(
                 value = state.port,
                 onValueChange = viewModel::setPort,
-                label = { Text("端口") },
+                label = { Text(stringResource(R.string.node_edit_port)) },
                 singleLine = true,
                 keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
                     keyboardType = KeyboardType.Number,
@@ -173,7 +187,7 @@ fun NodeEditScreen(
             enabled = state.canSave,
             modifier = Modifier.fillMaxWidth(),
         ) {
-            Text("保存")
+            Text(stringResource(R.string.common_save))
         }
     }
 }

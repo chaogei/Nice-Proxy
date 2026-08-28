@@ -1,7 +1,10 @@
 package com.niceproxy.feature.nodes
 
+import android.content.Context
+import androidx.annotation.StringRes
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.niceproxy.R
 import com.niceproxy.core.config.share.ShareLinkExporter
 import com.niceproxy.core.data.ServerRepository
 import com.niceproxy.core.data.SubscriptionRepository
@@ -32,20 +35,85 @@ import kotlinx.coroutines.withContext
 import javax.inject.Inject
 
 /** 节点列表排序方式。 */
-enum class NodeSort(val label: String) {
-    DEFAULT("默认"),
-    LATENCY("延迟"),
-    NAME("名称"),
+enum class NodeSort(@StringRes val labelRes: Int) {
+    DEFAULT(R.string.nodes_sort_default),
+    LATENCY(R.string.nodes_sort_latency),
+    NAME(R.string.nodes_sort_name),
 }
 
 /**
  * 两种测速的取舍见 [LatencyTester] 的注释：
  * TCPing 随时可测但只反映入口可达性，真连接延迟准确但要求内核在运行。
+ *
+ * 「TCPing」是协议层面的既有名词，各语言下都保持原样，所以它也走资源
+ * —— 让两个选项从同一处取文案，而不是一个走资源一个写字面量。
  */
-enum class TestMode(val label: String) {
-    TCPING("TCPing"),
-    REAL("真连接"),
+enum class TestMode(@StringRes val labelRes: Int) {
+    TCPING(R.string.nodes_test_tcping),
+    REAL(R.string.nodes_test_real),
 }
+
+/**
+ * 节点页要弹的提示。
+ *
+ * 存成结构而不是拼好的字符串：ViewModel 活得比 Activity 长，用户在设置里
+ * 换了语言之后，早先塞进 StateFlow 的那句话仍是旧语言的。让界面在真正要
+ * 显示的那一刻，用它当时的 Context 取文案。
+ */
+sealed interface NodesMessage {
+    data object Switched : NodesMessage
+    data class SwitchFailed(val reason: String?) : NodesMessage
+    data object RealTestNeedsCore : NodesMessage
+    data object TestFinished : NodesMessage
+    data class DuplicatesRemoved(val count: Int) : NodesMessage
+    data object NoDuplicates : NodesMessage
+    data class InvalidRemoved(val count: Int) : NodesMessage
+    data object NoInvalid : NodesMessage
+    data object ClipboardEmpty : NodesMessage
+    data object NoLinksFound : NodesMessage
+    data class Imported(val imported: Int) : NodesMessage
+    data class PartiallyImported(val imported: Int, val failed: Int) : NodesMessage
+    data object SubscriptionUrlRequired : NodesMessage
+    data class Subscribed(val group: String, val nodes: Int, val filtered: Int) : NodesMessage
+    data class SubscribeFailed(val reason: String?) : NodesMessage
+    data class Refreshed(val nodes: Int) : NodesMessage
+    data class RefreshFailed(val reason: String?) : NodesMessage
+    data class NotShareable(val protocol: String) : NodesMessage
+    data object GroupDeleted : NodesMessage
+
+    fun resolve(context: Context): String = when (this) {
+        Switched -> context.getString(R.string.nodes_switched)
+        is SwitchFailed -> context.getString(R.string.nodes_switch_failed, reason.orUnknown(context))
+        RealTestNeedsCore -> context.getString(R.string.nodes_real_test_needs_core)
+        TestFinished -> context.getString(R.string.nodes_test_finished)
+        is DuplicatesRemoved -> context.getString(R.string.nodes_duplicates_removed, count)
+        NoDuplicates -> context.getString(R.string.nodes_no_duplicates)
+        is InvalidRemoved -> context.getString(R.string.nodes_invalid_removed, count)
+        NoInvalid -> context.getString(R.string.nodes_no_invalid)
+        ClipboardEmpty -> context.getString(R.string.nodes_clipboard_empty)
+        NoLinksFound -> context.getString(R.string.nodes_no_links_found)
+        is Imported -> context.getString(R.string.nodes_imported, imported)
+        is PartiallyImported ->
+            context.getString(R.string.nodes_imported_partial, imported, failed)
+        SubscriptionUrlRequired -> context.getString(R.string.nodes_subscription_url_required)
+        is Subscribed -> if (filtered > 0) {
+            context.getString(R.string.nodes_subscribed_filtered, group, nodes, filtered)
+        } else {
+            context.getString(R.string.nodes_subscribed, group, nodes)
+        }
+        is SubscribeFailed ->
+            context.getString(R.string.nodes_subscribe_failed, reason.orUnknown(context))
+        is Refreshed -> context.getString(R.string.nodes_refreshed, nodes)
+        is RefreshFailed ->
+            context.getString(R.string.nodes_refresh_failed, reason.orUnknown(context))
+        is NotShareable -> context.getString(R.string.nodes_not_shareable, protocol)
+        GroupDeleted -> context.getString(R.string.nodes_group_deleted)
+    }
+}
+
+/** 异常的 message 经常是 null，直接插进去会在句子中间留一个字面的 "null"。 */
+private fun String?.orUnknown(context: Context): String =
+    this?.takeIf { it.isNotBlank() } ?: context.getString(R.string.common_unknown_error)
 
 data class NodesUiState(
     val groups: List<ServerGroup> = emptyList(),
@@ -145,8 +213,8 @@ class NodesViewModel @Inject constructor(
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), NodesUiState())
 
-    private val _message = MutableStateFlow<String?>(null)
-    val message: StateFlow<String?> = _message.asStateFlow()
+    private val _message = MutableStateFlow<NodesMessage?>(null)
+    val message: StateFlow<NodesMessage?> = _message.asStateFlow()
 
     fun selectGroup(groupId: String?) { selectedGroupId.value = groupId }
     fun setQuery(value: String) { query.value = value }
@@ -165,8 +233,8 @@ class NodesViewModel @Inject constructor(
             if (controller.state.value is ProxyState.Running) {
                 val api = settings.clashApiSettings()
                 clashApi.selectProxy(api, WellKnownTag.PROXY, tag).fold(
-                    onSuccess = { _message.value = "已切换，现有连接不受影响" },
-                    onFailure = { _message.value = "切换失败：${it.message}" },
+                    onSuccess = { _message.value = NodesMessage.Switched },
+                    onFailure = { _message.value = NodesMessage.SwitchFailed(it.message) },
                 )
             }
         }
@@ -177,7 +245,7 @@ class NodesViewModel @Inject constructor(
         if (targets.isEmpty()) return
 
         if (testMode.value == TestMode.REAL && controller.state.value !is ProxyState.Running) {
-            _message.value = "真连接测速需要先启动代理，或改用 TCPing"
+            _message.value = NodesMessage.RealTestNeedsCore
             return
         }
 
@@ -189,7 +257,7 @@ class NodesViewModel @Inject constructor(
                     TestMode.TCPING -> runTcping(targets)
                     TestMode.REAL -> runRealDelay(targets)
                 }
-                _message.value = "测速完成"
+                _message.value = NodesMessage.TestFinished
             } finally {
                 testProgress.value = null
             }
@@ -230,38 +298,43 @@ class NodesViewModel @Inject constructor(
     fun deleteDuplicates() {
         viewModelScope.launch {
             val removed = serverRepository.deleteDuplicates(selectedGroupId.value)
-            _message.value = if (removed > 0) "已删除 $removed 个重复节点" else "没有发现重复节点"
+            _message.value = if (removed > 0) {
+                NodesMessage.DuplicatesRemoved(removed)
+            } else {
+                NodesMessage.NoDuplicates
+            }
         }
     }
 
     fun deleteInvalid() {
         viewModelScope.launch {
             val removed = serverRepository.deleteInvalid(selectedGroupId.value)
-            _message.value = when {
-                removed > 0 -> "已删除 $removed 个测速失败的节点"
-                else -> "没有测速失败的节点。请先测速。"
+            _message.value = if (removed > 0) {
+                NodesMessage.InvalidRemoved(removed)
+            } else {
+                NodesMessage.NoInvalid
             }
         }
     }
 
     fun importFromClipboard(text: String) {
         if (text.isBlank()) {
-            _message.value = "剪贴板为空"
+            _message.value = NodesMessage.ClipboardEmpty
             return
         }
         viewModelScope.launch {
             val outcome = serverRepository.importFromText(text, selectedGroupId.value)
             _message.value = when {
-                outcome.imported == 0 -> "没有识别到可用的节点链接"
-                outcome.failed == 0 -> "已导入 ${outcome.imported} 个节点"
-                else -> "已导入 ${outcome.imported} 个，${outcome.failed} 个无法识别"
+                outcome.imported == 0 -> NodesMessage.NoLinksFound
+                outcome.failed == 0 -> NodesMessage.Imported(outcome.imported)
+                else -> NodesMessage.PartiallyImported(outcome.imported, outcome.failed)
             }
         }
     }
 
     fun addSubscription(url: String, name: String, filter: String) {
         if (url.isBlank()) {
-            _message.value = "请填写订阅地址"
+            _message.value = NodesMessage.SubscriptionUrlRequired
             return
         }
         viewModelScope.launch {
@@ -273,14 +346,13 @@ class NodesViewModel @Inject constructor(
                     remarksFilter = filter.trim().takeIf { it.isNotBlank() },
                 ).fold(
                     onSuccess = { outcome ->
-                        _message.value = buildString {
-                            append("「${outcome.groupName}」已导入 ${outcome.nodeCount} 个节点")
-                            if (outcome.filteredCount > 0) {
-                                append("，过滤掉 ${outcome.filteredCount} 条")
-                            }
-                        }
+                        _message.value = NodesMessage.Subscribed(
+                            group = outcome.groupName,
+                            nodes = outcome.nodeCount,
+                            filtered = outcome.filteredCount,
+                        )
                     },
-                    onFailure = { _message.value = "订阅失败：${it.message}" },
+                    onFailure = { _message.value = NodesMessage.SubscribeFailed(it.message) },
                 )
             } finally {
                 refreshing.value = false
@@ -293,8 +365,8 @@ class NodesViewModel @Inject constructor(
             refreshing.value = true
             try {
                 subscriptionRepository.refresh(groupId).fold(
-                    onSuccess = { _message.value = "已更新 ${it.nodeCount} 个节点" },
-                    onFailure = { _message.value = "更新失败：${it.message}" },
+                    onSuccess = { _message.value = NodesMessage.Refreshed(it.nodeCount) },
+                    onFailure = { _message.value = NodesMessage.RefreshFailed(it.message) },
                 )
             } finally {
                 refreshing.value = false
@@ -314,7 +386,7 @@ class NodesViewModel @Inject constructor(
     fun share(node: ServerProfile) {
         val link = ShareLinkExporter.export(node)
         if (link == null) {
-            _message.value = "${node.protocol.displayName} 没有通用的分享链接格式"
+            _message.value = NodesMessage.NotShareable(node.protocol.displayName)
             return
         }
         _shareTarget.value = ShareTarget(node.name, link)
@@ -326,7 +398,7 @@ class NodesViewModel @Inject constructor(
         viewModelScope.launch {
             serverRepository.deleteGroup(id)
             if (selectedGroupId.value == id) selectedGroupId.value = null
-            _message.value = "已删除分组及其节点"
+            _message.value = NodesMessage.GroupDeleted
         }
     }
 

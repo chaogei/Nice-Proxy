@@ -4,6 +4,7 @@ import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -24,6 +25,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -35,9 +37,11 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
+import com.niceproxy.R
 import com.niceproxy.core.designsystem.component.GlassBar
 import com.niceproxy.core.designsystem.component.GlassScaffold
 import com.niceproxy.core.designsystem.component.LocalHazeState
+import com.niceproxy.feature.expert.ConfigPreviewScreen
 import com.niceproxy.feature.home.HomeScreen
 import com.niceproxy.feature.inbound.InboundEditScreen
 import com.niceproxy.feature.logs.LogsScreen
@@ -70,13 +74,16 @@ fun NiceApp(
     val onboardingCompleted by viewModel.onboardingCompleted.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
 
+    val configChangedText = stringResource(R.string.shell_config_outdated)
+    val applyText = stringResource(R.string.shell_config_apply)
+
     // 配置改动不立刻重启内核：那会在用户还在连续调整设置时反复断流。
     // 改成攒着提示一次，由用户决定何时应用。见 docs/DESIGN.md §8.2。
     LaunchedEffect(configOutdated) {
         if (!configOutdated) return@LaunchedEffect
         val result = snackbarHostState.showSnackbar(
-            message = "配置已变更",
-            actionLabel = "应用",
+            message = configChangedText,
+            actionLabel = applyText,
             duration = SnackbarDuration.Indefinite,
         )
         if (result == SnackbarResult.ActionPerformed) viewModel.reapplyConfig()
@@ -149,6 +156,7 @@ fun NiceApp(
                     onOpenLogs = { navController.navigate(Routes.LOGS) },
                     onOpenMonitor = { navController.navigate(Routes.MONITOR) },
                     onOpenSettings = { navController.navigate(Routes.SETTINGS) },
+                    onOpenConfigPreview = { navController.navigate(Routes.CONFIG_PREVIEW) },
                 )
             }
 
@@ -169,6 +177,9 @@ fun NiceApp(
             }
             composable(Routes.SETTINGS) {
                 SettingsScreen(onNavigateBack = navController::popBackStack)
+            }
+            composable(Routes.CONFIG_PREVIEW) {
+                ConfigPreviewScreen(onNavigateBack = navController::popBackStack)
             }
             composable(Routes.SCAN) {
                 ScanScreen(
@@ -218,6 +229,7 @@ private fun GlassBottomBar(
                     },
                     label = "navTint",
                 )
+                val label = stringResource(destination.labelRes)
                 androidx.compose.foundation.layout.Column(
                     horizontalAlignment = Alignment.CenterHorizontally,
                     modifier = Modifier
@@ -226,17 +238,22 @@ private fun GlassBottomBar(
                             onClick = { onSelect(destination) },
                             role = Role.Tab,
                         )
+                        // 图标 22dp + 文字，纵向不足 48dp 的触控目标。补足高度
+                        // 而不是加 padding：加 padding 会把四个 Tab 撑开变形。
+                        .defaultMinSize(minHeight = 48.dp)
                         .padding(horizontal = 18.dp, vertical = 6.dp),
+                    verticalArrangement = Arrangement.Center,
                 ) {
                     Icon(
                         imageVector = destination.icon,
-                        contentDescription = destination.label,
+                        // 文字就在图标正下方，图标再念一遍等于读屏说两遍
+                        contentDescription = null,
                         tint = tint,
                         modifier = Modifier.size(22.dp),
                     )
                     Spacer(Modifier.height(2.dp))
                     Text(
-                        text = destination.label,
+                        text = label,
                         style = MaterialTheme.typography.labelSmall,
                         color = tint,
                         fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,

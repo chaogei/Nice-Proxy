@@ -127,7 +127,7 @@ object AppearanceStore {
      * 系统存的可能是 `zh-Hans-CN` 这类带脚本的完整标签，直接和 `zh-CN` 比字符串
      * 永远不相等 —— 症状是设置页的选中项每次进去都弹回「跟随系统」。
      */
-    private fun matchTag(locale: Locale): String? = AppLanguage.entries
+    internal fun matchTag(locale: Locale): String? = AppLanguage.entries
         .mapNotNull { it.tag }
         .firstOrNull { Locale.forLanguageTag(it).language == locale.language }
 }

@@ -155,4 +155,21 @@ dependencies {
 
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.kotlinx.serialization.json)
+
+    testImplementation(libs.junit5.jupiter)
+    testRuntimeOnly(libs.junit5.platform.launcher)
+    testImplementation(libs.truth)
+    testImplementation(libs.kotlinx.coroutines.test)
+}
+
+tasks.withType<Test>().configureEach {
+    useJUnitPlatform()
+
+    // StringCatalogueTest 直接读源码树里的 strings.xml，而不是走 R.string ——
+    // 后者只能拿到当前 locale 的一份，正好看不见「另一种语言少了这条」。
+    // 代价是 Gradle 不知道这层依赖：只改 XML 不改 Kotlin 时它会把测试判成
+    // UP-TO-DATE 直接跳过，而那恰恰是这个测试唯一该跑的时候。
+    inputs.dir(layout.projectDirectory.dir("src/main/res"))
+        .withPropertyName("localizedResources")
+        .withPathSensitivity(PathSensitivity.RELATIVE)
 }

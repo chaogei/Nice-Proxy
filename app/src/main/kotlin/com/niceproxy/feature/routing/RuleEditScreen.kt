@@ -1,10 +1,12 @@
 package com.niceproxy.feature.routing
 
+import androidx.annotation.StringRes
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
@@ -30,10 +32,14 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.niceproxy.R
 import com.niceproxy.core.data.RoutingRepository
 import com.niceproxy.core.data.ServerRepository
 import com.niceproxy.core.designsystem.component.GlassPanel
@@ -49,9 +55,25 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
+/**
+ * 出站选项。
+ *
+ * `proxy` / `direct` / `auto` 是配置生成器保留的固定 tag，界面上得显示成
+ * 「代理」「直连」「自动选择」并跟着语言走；其余是用户给自己节点起的名字，
+ * 原样显示。用 `Pair<String, String>` 的话这两种东西长得一模一样，
+ * ViewModel 就只能自己拼中文，而 ViewModel 里没有 `Context`。
+ */
+sealed interface OutboundChoice {
+    val tag: String
+
+    data class WellKnown(override val tag: String, @StringRes val labelRes: Int) : OutboundChoice
+
+    data class Node(override val tag: String, val name: String) : OutboundChoice
+}
+
 data class RuleEditUiState(
     val isNew: Boolean = true,
-    val name: String = "新规则",
+    val name: String = "",
     val domainSuffix: String = "",
     val domainKeyword: String = "",
     val ipCidr: String = "",
@@ -59,7 +81,7 @@ data class RuleEditUiState(
     val outboundTag: String = WellKnownTag.PROXY,
     val reject: Boolean = false,
     val locked: Boolean = false,
-    val availableOutbounds: List<Pair<String, String>> = emptyList(),
+    val availableOutbounds: List<OutboundChoice> = emptyList(),
     val finished: Boolean = false,
 ) {
     val canSave: Boolean
@@ -82,11 +104,28 @@ class RuleEditViewModel @Inject constructor(
 
     init {
         viewModelScope.launch {
-            val outbounds = buildList {
-                add(WellKnownTag.PROXY to "代理")
-                add(WellKnownTag.DIRECT to "直连")
-                add(WellKnownTag.AUTO to "自动选择")
-                serverRepository.getAll().forEach { add(it.outboundTag to it.name) }
+            val outbounds = buildList<OutboundChoice> {
+                add(
+                    OutboundChoice.WellKnown(
+                        WellKnownTag.PROXY,
+                        R.string.routing_action_proxy,
+                    ),
+                )
+                add(
+                    OutboundChoice.WellKnown(
+                        WellKnownTag.DIRECT,
+                        R.string.routing_action_direct,
+                    ),
+                )
+                add(
+                    OutboundChoice.WellKnown(
+                        WellKnownTag.AUTO,
+                        R.string.routing_outbound_auto,
+                    ),
+                )
+                serverRepository.getAll().forEach {
+                    add(OutboundChoice.Node(it.outboundTag, it.name))
+                }
             }
             _uiState.update { it.copy(availableOutbounds = outbounds) }
 
@@ -109,6 +148,18 @@ class RuleEditViewModel @Inject constructor(
                 }
             }
         }
+    }
+
+    /**
+     * 新建规则时预填一个名字。
+     *
+     * 这个默认值原本写死在 state 的默认参数里，是个中文字面量 —— 而
+     * ViewModel 拿不到 `Context`，翻不了。改由界面把已经本地化好的字符串
+     * 送进来。只在「确实是新建」且用户还没输入时生效，否则重进页面（配置
+     * 变更导致的重组也会触发）会把用户打了一半的名字盖掉。
+     */
+    fun seedDefaultName(value: String) = _uiState.update {
+        if (it.isNew && it.name.isEmpty()) it.copy(name = value) else it
     }
 
     fun setName(value: String) = _uiState.update { it.copy(name = value) }
@@ -157,6 +208,9 @@ fun RuleEditScreen(
     viewModel: RuleEditViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
+    val defaultName = stringResource(R.string.rule_edit_default_name)
+
+    LaunchedEffect(defaultName) { viewModel.seedDefaultName(defaultName) }
 
     LaunchedEffect(state.finished) {
         if (state.finished) onNavigateBack()
@@ -178,10 +232,15 @@ fun RuleEditScreen(
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = onNavigateBack) {
-                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
+                Icon(
+                    Icons.AutoMirrored.Filled.ArrowBack,
+                    contentDescription = stringResource(R.string.common_back),
+                )
             }
             Text(
-                text = if (state.isNew) "新建规则" else "编辑规则",
+                text = stringResource(
+                    if (state.isNew) R.string.rule_edit_title_new else R.string.rule_edit_title_edit,
+                ),
                 style = MaterialTheme.typography.headlineSmall,
                 fontWeight = FontWeight.Bold,
             )
@@ -195,7 +254,7 @@ fun RuleEditScreen(
             OutlinedTextField(
                 value = state.name,
                 onValueChange = viewModel::setName,
-                label = { Text("规则名称") },
+                label = { Text(stringResource(R.string.rule_edit_name)) },
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth(),
             )
@@ -206,22 +265,40 @@ fun RuleEditScreen(
             modifier = Modifier.fillMaxWidth(),
             contentPadding = 16.dp,
         ) {
-            Text("匹配条件", style = MaterialTheme.typography.titleSmall)
             Text(
-                text = "每行一项，也可用逗号分隔。多个条件之间是「且」的关系。",
+                text = stringResource(R.string.rule_edit_match_section),
+                style = MaterialTheme.typography.titleSmall,
+            )
+            Text(
+                text = stringResource(R.string.rule_edit_match_hint),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(top = 4.dp, bottom = 12.dp),
             )
-            MultilineField("域名后缀", "google.com", state.domainSuffix, viewModel::setDomainSuffix)
-            MultilineField("域名关键词", "youtube", state.domainKeyword, viewModel::setDomainKeyword)
-            MultilineField("目标 IP 段", "8.8.8.0/24", state.ipCidr, viewModel::setIpCidr)
             MultilineField(
-                label = "客户端来源 IP",
+                label = stringResource(R.string.rule_edit_domain_suffix),
+                placeholder = "google.com",
+                value = state.domainSuffix,
+                onChange = viewModel::setDomainSuffix,
+            )
+            MultilineField(
+                label = stringResource(R.string.rule_edit_domain_keyword),
+                placeholder = "youtube",
+                value = state.domainKeyword,
+                onChange = viewModel::setDomainKeyword,
+            )
+            MultilineField(
+                label = stringResource(R.string.rule_edit_ip_cidr),
+                placeholder = "8.8.8.0/24",
+                value = state.ipCidr,
+                onChange = viewModel::setIpCidr,
+            )
+            MultilineField(
+                label = stringResource(R.string.rule_edit_source_ip),
                 placeholder = "192.168.1.100/32",
                 value = state.sourceIpCidr,
                 onChange = viewModel::setSourceIpCidr,
-                hint = "网关形态独有：让不同设备走不同出站",
+                hint = stringResource(R.string.rule_edit_source_ip_hint),
             )
         }
 
@@ -230,22 +307,32 @@ fun RuleEditScreen(
             modifier = Modifier.fillMaxWidth(),
             contentPadding = 16.dp,
         ) {
-            Text("命中后", style = MaterialTheme.typography.titleSmall)
-            androidx.compose.foundation.layout.FlowRow(
+            Text(
+                text = stringResource(R.string.rule_edit_action_section),
+                style = MaterialTheme.typography.titleSmall,
+            )
+            FlowRow(
                 modifier = Modifier.padding(top = 10.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                state.availableOutbounds.forEach { (tag, label) ->
+                state.availableOutbounds.forEach { choice ->
                     FilterChip(
-                        selected = !state.reject && state.outboundTag == tag,
-                        onClick = { viewModel.setOutbound(tag) },
-                        label = { Text(label) },
+                        selected = !state.reject && state.outboundTag == choice.tag,
+                        onClick = { viewModel.setOutbound(choice.tag) },
+                        label = {
+                            Text(
+                                when (choice) {
+                                    is OutboundChoice.WellKnown -> stringResource(choice.labelRes)
+                                    is OutboundChoice.Node -> choice.name
+                                },
+                            )
+                        },
                     )
                 }
                 FilterChip(
                     selected = state.reject,
                     onClick = viewModel::setReject,
-                    label = { Text("拒绝") },
+                    label = { Text(stringResource(R.string.routing_action_reject)) },
                 )
             }
         }
@@ -255,17 +342,21 @@ fun RuleEditScreen(
             modifier = Modifier.fillMaxWidth(),
             contentPadding = 16.dp,
         ) {
+            val lockedLabel = stringResource(R.string.rule_edit_locked_title)
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Column(modifier = Modifier.weight(1f)) {
-                    Text("套用模板时保留", style = MaterialTheme.typography.bodyLarge)
+                    Text(lockedLabel, style = MaterialTheme.typography.bodyLarge)
                     Text(
-                        text = "切换分流模式会清空未锁定的规则。手写的规则建议锁定，" +
-                            "否则一键切模板就没了。",
+                        text = stringResource(R.string.rule_edit_locked_hint),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
-                Switch(checked = state.locked, onCheckedChange = viewModel::setLocked)
+                Switch(
+                    checked = state.locked,
+                    onCheckedChange = viewModel::setLocked,
+                    modifier = Modifier.semantics { contentDescription = lockedLabel },
+                )
             }
         }
 
@@ -274,7 +365,7 @@ fun RuleEditScreen(
             enabled = state.canSave,
             modifier = Modifier.fillMaxWidth(),
         ) {
-            Text("保存")
+            Text(stringResource(R.string.common_save))
         }
     }
 }

@@ -22,6 +22,114 @@
     <string name="common_share">分享</string>
     <string name="common_close">关闭</string>
     <string name="common_retry">重试</string>
+    <string name="common_save">保存</string>
+    <string name="common_more_actions">更多操作</string>
+    <string name="common_clear">清除</string>
+    <string name="common_selected">已选中</string>
+    <string name="common_edit">编辑</string>
+    <!-- 异常的 message 常常是 null，句子中间不能露出一个字面的 "null" -->
+    <string name="common_unknown_error">未知错误</string>
+
+    <!-- ============================ 节点 ============================ -->
+    <string name="nodes_title">节点</string>
+    <string name="nodes_scan">扫码导入</string>
+    <string name="nodes_import_clipboard">从剪贴板导入</string>
+    <string name="nodes_add_subscription">添加订阅</string>
+    <string name="nodes_add_manual">手动添加</string>
+    <string name="nodes_search_placeholder">搜索名称或地址</string>
+    <string name="nodes_sort">排序</string>
+    <string name="nodes_sort_default">默认</string>
+    <string name="nodes_sort_latency">延迟</string>
+    <string name="nodes_sort_name">名称</string>
+    <!-- TCPing 是既有的协议层名词，各语言下都保持原样 -->
+    <string name="nodes_test_tcping" translatable="false">TCPing</string>
+    <string name="nodes_test_real">真连接</string>
+    <string name="nodes_count">%1$d 个节点</string>
+    <string name="nodes_test">测速</string>
+    <string name="nodes_test_progress">%1$d/%2$d</string>
+    <string name="nodes_real_test_hint">真连接测速需要先启动代理。只想快速筛掉连不上的节点可以用 TCPing。</string>
+    <string name="nodes_empty">还没有节点。可以从剪贴板粘贴分享链接，或添加机场订阅。</string>
+    <string name="nodes_group_all">全部 (%1$d)</string>
+    <string name="nodes_auto_title">自动选择</string>
+    <string name="nodes_auto_subtitle">定期测速，始终使用延迟最低的节点</string>
+    <string name="nodes_unreadable">凭据无法解密，点击重新导入</string>
+    <string name="nodes_endpoint">%1$s:%2$d</string>
+    <string name="nodes_share">分享</string>
+    <string name="nodes_share_hint">用另一台设备的代理客户端扫码即可导入。</string>
+    <string name="nodes_share_copy">复制链接</string>
+    <string name="nodes_share_copied">已复制分享链接</string>
+    <string name="nodes_subscription_refresh">更新订阅</string>
+    <string name="nodes_subscription_delete">删除订阅</string>
+    <string name="nodes_subscription_traffic">已用 %1$s / %2$s</string>
+    <string name="nodes_subscription_last_error">上次更新失败：%1$s</string>
+    <string name="nodes_delete_group_title">删除订阅</string>
+    <string name="nodes_delete_group_message">将同时删除「%1$s」下的所有节点，此操作不可撤销。</string>
+    <string name="nodes_delete_node_title">删除节点</string>
+    <string name="nodes_delete_node_message">「%1$s」（%2$s:%3$d）将被删除，此操作不可撤销。</string>
+    <string name="nodes_bulk_duplicates">删除重复节点</string>
+    <string name="nodes_bulk_duplicates_message">地址与端口相同的节点只保留一个。此操作不可撤销。</string>
+    <string name="nodes_bulk_invalid">删除测速失败的节点</string>
+    <string name="nodes_bulk_invalid_message">上次测速超时或失败的节点会被全部删除。测速结果受当时网络状况影响，换个网络可能就通了。此操作不可撤销。</string>
+    <string name="nodes_subscription_dialog_title">添加订阅</string>
+    <string name="nodes_subscription_url">订阅地址</string>
+    <string name="nodes_subscription_name">名称（可留空）</string>
+    <string name="nodes_subscription_filter">排除的节点名（正则，可留空）</string>
+    <string name="nodes_subscription_filter_placeholder">剩余流量|到期|官网|续费</string>
+    <string name="nodes_subscription_filter_hint">机场常在订阅里塞「剩余流量」「官网地址」这类伪装成节点的公告，填个正则可以直接滤掉。</string>
+    <string name="nodes_subscription_formats">支持 Base64 链接列表、Clash YAML、sing-box JSON 与 SIP008。</string>
+    <string name="nodes_subscription_import">导入</string>
+    <!-- 提示 -->
+    <string name="nodes_switched">已切换，现有连接不受影响</string>
+    <string name="nodes_switch_failed">切换失败：%1$s</string>
+    <string name="nodes_real_test_needs_core">真连接测速需要先启动代理，或改用 TCPing</string>
+    <string name="nodes_test_finished">测速完成</string>
+    <string name="nodes_duplicates_removed">已删除 %1$d 个重复节点</string>
+    <string name="nodes_no_duplicates">没有发现重复节点</string>
+    <string name="nodes_invalid_removed">已删除 %1$d 个测速失败的节点</string>
+    <string name="nodes_no_invalid">没有测速失败的节点。请先测速。</string>
+    <string name="nodes_clipboard_empty">剪贴板为空</string>
+    <string name="nodes_no_links_found">没有识别到可用的节点链接</string>
+    <string name="nodes_imported">已导入 %1$d 个节点</string>
+    <string name="nodes_imported_partial">已导入 %1$d 个，%2$d 个无法识别</string>
+    <string name="nodes_subscription_url_required">请填写订阅地址</string>
+    <string name="nodes_subscribed">「%1$s」已导入 %2$d 个节点</string>
+    <string name="nodes_subscribed_filtered">「%1$s」已导入 %2$d 个节点，过滤掉 %3$d 条</string>
+    <string name="nodes_subscribe_failed">订阅失败：%1$s</string>
+    <string name="nodes_refreshed">已更新 %1$d 个节点</string>
+    <string name="nodes_refresh_failed">更新失败：%1$s</string>
+    <string name="nodes_not_shareable">%1$s 没有通用的分享链接格式</string>
+    <string name="nodes_group_deleted">已删除分组及其节点</string>
+
+    <!-- ============================ 扫码 ============================ -->
+    <string name="scan_title">扫描二维码</string>
+    <string name="scan_permission_hint">需要相机权限才能扫码。也可以直接从相册选一张二维码图片。</string>
+    <string name="scan_pick_from_gallery">从相册选择</string>
+    <string name="scan_no_qr_in_image">图片中没有识别到二维码</string>
+    <string name="scan_empty">扫到的内容为空</string>
+    <string name="scan_unrecognised">无法识别这个二维码的内容</string>
+    <string name="scan_subscribe_failed">订阅导入失败：%1$s</string>
+
+    <!-- 节点编辑 -->
+    <string name="node_edit_title_new">添加节点</string>
+    <string name="node_edit_title">编辑节点</string>
+    <string name="node_edit_paste_link">粘贴分享链接</string>
+    <!-- 全是协议 scheme，任何语言下都保持原样 -->
+    <string name="node_edit_supported_schemes" translatable="false">ss / vmess / vless / trojan / hysteria2 / tuic / anytls / socks / http</string>
+    <string name="node_edit_link">分享链接</string>
+    <string name="node_edit_link_unparsable">无法解析该链接</string>
+    <string name="node_edit_parse_and_save">解析并保存</string>
+    <string name="node_edit_no_manual_entry">暂不支持逐项手填：一个可用的节点还需要协议类型、加密方式与凭据，这些只有分享链接、二维码或机场订阅里才带得全。\n没有链接的话，可以回节点页用右上角的扫码或添加订阅。</string>
+    <string name="node_edit_name">名称</string>
+    <string name="node_edit_server">服务器地址</string>
+    <string name="node_edit_port">端口</string>
+
+    <!-- ============================ 导航 ============================ -->
+    <string name="nav_home">首页</string>
+    <string name="nav_nodes">节点</string>
+    <string name="nav_routing">分流</string>
+    <string name="nav_more">更多</string>
+    <string name="shell_config_outdated">配置已变更</string>
+    <string name="shell_config_apply">应用</string>
 
     <!-- ============================ 首页 ============================ -->
     <string name="home_title">Nice Proxy</string>
@@ -146,6 +254,7 @@
     <string name="routing_apply_title">套用「%1$s」</string>
     <string name="routing_apply_message">预设模式会整体替换规则列表：当前 %1$d 条未锁定的规则将被删除，已锁定的会保留。此操作不可撤销。\n\n想留下某条手写规则，可以先取消，打开那条规则的「套用模板时保留」再回来。</string>
     <string name="routing_apply_confirm">套用</string>
+    <string name="routing_applied">已套用「%1$s」</string>
     <string name="routing_delete_title">删除规则</string>
     <string name="routing_delete_message">「%1$s」将被删除，此操作不可撤销。命中它的流量会改由后面的规则或默认出站处理。</string>
     <string name="routing_rule_summary">%1$s → %2$s</string>
@@ -166,6 +275,35 @@
     <string name="routing_action_hijack_dns">接管 DNS</string>
     <string name="routing_action_sniff">嗅探</string>
     <string name="routing_action_resolve">解析域名</string>
+    <!--
+      模式名与说明在 core:model 的 RoutingMode 里是写死的中文常量，而 core 不在
+      本次可改范围内。在 app 层按枚举重新映射一遍，让它跟着界面语言走。
+    -->
+    <string name="routing_mode_global_proxy">全局代理</string>
+    <string name="routing_mode_global_proxy_desc">所有流量都走上游节点</string>
+    <string name="routing_mode_bypass_mainland">绕过大陆</string>
+    <string name="routing_mode_bypass_mainland_desc">中国大陆网站与 IP 直连，其余走节点</string>
+    <string name="routing_mode_global_direct">全局直连</string>
+    <string name="routing_mode_global_direct_desc">不使用上游节点，等价于纯中继模式</string>
+    <string name="routing_mode_custom">自定义</string>
+    <string name="routing_mode_custom_desc">使用自定义规则列表</string>
+    <string name="routing_outbound_auto">自动选择</string>
+
+    <!-- 规则编辑 -->
+    <string name="rule_edit_default_name">新规则</string>
+    <string name="rule_edit_title_new">新建规则</string>
+    <string name="rule_edit_title_edit">编辑规则</string>
+    <string name="rule_edit_name">规则名称</string>
+    <string name="rule_edit_match_section">匹配条件</string>
+    <string name="rule_edit_match_hint">每行一项，也可用逗号分隔。多个条件之间是「且」的关系。</string>
+    <string name="rule_edit_domain_suffix">域名后缀</string>
+    <string name="rule_edit_domain_keyword">域名关键词</string>
+    <string name="rule_edit_ip_cidr">目标 IP 段</string>
+    <string name="rule_edit_source_ip">客户端来源 IP</string>
+    <string name="rule_edit_source_ip_hint">网关形态独有：让不同设备走不同出站</string>
+    <string name="rule_edit_action_section">命中后</string>
+    <string name="rule_edit_locked_title">套用模板时保留</string>
+    <string name="rule_edit_locked_hint">切换分流模式会清空未锁定的规则。手写的规则建议锁定，否则一键切模板就没了。</string>
 
     <!-- ============================ 设置 ============================ -->
     <string name="settings_title">设置</string>
@@ -177,8 +315,13 @@
     <string name="settings_theme_dark">深色</string>
     <string name="settings_language">语言</string>
     <string name="settings_language_system">跟随系统</string>
-    <string name="settings_language_chinese">简体中文</string>
-    <string name="settings_language_english">English</string>
+    <!--
+      语言名一律用它自己那门语言写（endonym）。在英文界面上把这一项显示成
+      "Simplified Chinese" 帮不到需要它的人 —— 会读那四个字的人才是要选它的人。
+      两种语言下值相同，所以不翻译。
+    -->
+    <string name="settings_language_chinese" translatable="false">简体中文</string>
+    <string name="settings_language_english" translatable="false">English</string>
     <string name="settings_language_hint">协议名称（SOCKS5、HTTP、PAC 等）在任何语言下都保持原样。</string>
 
     <string name="settings_group_service">服务</string>
