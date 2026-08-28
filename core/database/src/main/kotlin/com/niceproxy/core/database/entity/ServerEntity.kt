@@ -56,7 +56,28 @@ internal fun <T> decodeOrNull(deserializer: DeserializationStrategy<T>, json: St
             onDelete = ForeignKey.CASCADE,
         ),
     ],
-    indices = [Index("group_id")],
+    /**
+     * 复合索引而不是单列 `group_id`。
+     *
+     * `observeByGroup` 是 `WHERE group_id = ? ORDER BY sort_order, name`：
+     * 只有 `group_id` 的话 SQLite 能用索引定位，但拿到那一组之后还要做一次
+     * 排序。一个上千节点的机场订阅就是一个分组，节点页每次数据库变更都会
+     * 重跑这条查询，而它下游还挂着上千次 JSON 反序列化。索引列顺序照抄
+     * `ORDER BY`，排序这一步就整个消失了。
+     *
+     * 旧的单列 `group_id` 索引被这一条完全覆盖（复合索引的前缀就是它），
+     * 因此撤掉，不留两条 —— 多一条索引就是多一份写放大，而订阅更新是整组重插。
+     *
+     * 换索引这件事**没有走自动迁移**：Room 对任何索引变动的处理都是
+     * 「新建表 → 全量拷贝 → DROP TABLE servers → 改名」，也就是要在升级过程中
+     * 把用户全部节点搬一遍，而这张表里装的正是唯一无法凭记忆重建的凭据。
+     * 换成手写 `NiceMigrations.MIGRATION_2_3` 之后，同一件事只是两条
+     * `DROP INDEX` / `CREATE INDEX` —— 索引是派生数据，重建它一行都不会碰。
+     *
+     * 其余几张表刻意**不加**索引：入站、分组、路由规则、规则集都是几个到
+     * 几十行的量级，索引的维护成本高于它能省下的那次全表扫。
+     */
+    indices = [Index("group_id", "sort_order", "name")],
 )
 data class ServerEntity(
     @PrimaryKey val id: String,

@@ -34,8 +34,33 @@ interface ServerDao {
     @Query("DELETE FROM servers WHERE id = :id")
     suspend fun deleteById(id: String)
 
+    @Query("DELETE FROM servers WHERE id IN (:ids)")
+    suspend fun deleteChunk(ids: List<String>)
+
+    /**
+     * 批量删除，整批一个事务。
+     *
+     * 逐条 `deleteById` 在 SQLite 里是逐条事务：一次「删除重复节点」在上千
+     * 节点的订阅上能删掉几百条，那就是几百次 fsync，几秒钟卡住不说，中途
+     * 被系统杀掉还会留下一个删了一半的列表。
+     *
+     * 分块是因为 `IN (...)` 里每个 id 都是一个绑定变量，而 SQLite 的
+     * `SQLITE_MAX_VARIABLE_NUMBER` 在旧版本上就是 999，超了直接抛异常。
+     * 留出余量取 500。
+     */
+    @Transaction
+    suspend fun deleteByIds(ids: List<String>) {
+        ids.chunked(DELETE_CHUNK).forEach { deleteChunk(it) }
+    }
+
     @Query("DELETE FROM servers WHERE group_id = :groupId")
     suspend fun deleteByGroup(groupId: String)
+
+    @Query("DELETE FROM servers")
+    suspend fun deleteAll()
+
+    @Query("SELECT COUNT(*) FROM servers")
+    suspend fun count(): Int
 
     @Query("UPDATE servers SET latency_ms = :latencyMs, last_tested_at = :testedAt WHERE id = :id")
     suspend fun updateLatency(id: String, latencyMs: Int?, testedAt: Long)
@@ -63,6 +88,11 @@ interface ServerDao {
         deleteByGroup(groupId)
         upsertAll(servers)
     }
+
+    companion object {
+        /** 见 [deleteByIds]：SQLite 的绑定变量上限是 999，留余量。 */
+        const val DELETE_CHUNK = 500
+    }
 }
 
 @Dao
@@ -86,8 +116,25 @@ interface ServerGroupDao {
     @Query("DELETE FROM server_groups WHERE id = :id")
     suspend fun deleteById(id: String)
 
+    /**
+     * 清空全部分组。`servers.group_id` 上的 CASCADE 会一并带走全部节点 ——
+     * 这正是备份恢复要的语义，但也意味着调用它之前必须已经在事务里。
+     */
+    @Query("DELETE FROM server_groups")
+    suspend fun deleteAll()
+
     @Query("SELECT COUNT(*) FROM server_groups")
     suspend fun count(): Int
+
+    /**
+     * 第一个手动分组，供「从剪贴板导入的节点该放哪」用。
+     *
+     * 有专门的查询是因为调用方原本是 `getAll().firstOrNull { ... }`：
+     * 那会把每个分组的订阅 URL 都过一遍 Keystore 解密，只为了挑出一个
+     * 根本没有 URL 的手动分组。
+     */
+    @Query("SELECT * FROM server_groups WHERE type = 'MANUAL' ORDER BY sort_order ASC, name ASC LIMIT 1")
+    suspend fun firstManual(): ServerGroupEntity?
 }
 
 @Dao
@@ -125,6 +172,9 @@ interface RoutingDao {
 
     @Query("DELETE FROM rule_sets WHERE id = :id")
     suspend fun deleteRuleSet(id: String)
+
+    @Query("DELETE FROM rule_sets")
+    suspend fun deleteAllRuleSets()
 
     @Query("DELETE FROM routing_rules WHERE locked = 0")
     suspend fun deleteUnlockedRules()
