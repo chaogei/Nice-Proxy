@@ -1,5 +1,6 @@
 package com.niceproxy.feature.nodes
 
+import androidx.annotation.StringRes
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -57,12 +58,14 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.niceproxy.R
 import com.niceproxy.core.designsystem.component.GlassPanel
 import com.niceproxy.core.designsystem.component.LatencyIndicator
 import com.niceproxy.core.designsystem.component.LocalHazeState
@@ -100,7 +103,7 @@ fun NodesScreen(
 
     LaunchedEffect(message) {
         message?.let {
-            banner = it
+            banner = it.resolve(context)
             viewModel.consumeMessage()
         }
     }
@@ -122,28 +125,43 @@ fun NodesScreen(
         item {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    text = "节点",
+                    text = stringResource(R.string.nodes_title),
                     style = MaterialTheme.typography.headlineSmall,
                     fontWeight = FontWeight.Bold,
                     modifier = Modifier.weight(1f),
                 )
                 IconButton(onClick = onScan) {
-                    Icon(Icons.Default.QrCodeScanner, contentDescription = "扫码导入")
+                    Icon(
+                        Icons.Default.QrCodeScanner,
+                        contentDescription = stringResource(R.string.nodes_scan),
+                    )
                 }
                 IconButton(
                     onClick = { viewModel.importFromClipboard(clipboard.getText()?.text.orEmpty()) },
                 ) {
-                    Icon(Icons.Default.ContentPaste, contentDescription = "从剪贴板导入")
+                    Icon(
+                        Icons.Default.ContentPaste,
+                        contentDescription = stringResource(R.string.nodes_import_clipboard),
+                    )
                 }
                 IconButton(onClick = { showSubscriptionDialog = true }) {
-                    Icon(Icons.Default.RssFeed, contentDescription = "添加订阅")
+                    Icon(
+                        Icons.Default.RssFeed,
+                        contentDescription = stringResource(R.string.nodes_add_subscription),
+                    )
                 }
                 IconButton(onClick = onAddNode) {
-                    Icon(Icons.Default.Add, contentDescription = "手动添加")
+                    Icon(
+                        Icons.Default.Add,
+                        contentDescription = stringResource(R.string.nodes_add_manual),
+                    )
                 }
                 Box {
                     IconButton(onClick = { showOverflow = true }) {
-                        Icon(Icons.Default.MoreVert, contentDescription = "更多操作")
+                        Icon(
+                            Icons.Default.MoreVert,
+                            contentDescription = stringResource(R.string.common_more_actions),
+                        )
                     }
                     DropdownMenu(
                         expanded = showOverflow,
@@ -151,7 +169,7 @@ fun NodesScreen(
                     ) {
                         BulkDelete.entries.forEach { action ->
                             DropdownMenuItem(
-                                text = { Text(action.label) },
+                                text = { Text(stringResource(action.labelRes)) },
                                 onClick = {
                                     pendingBulkDelete = action
                                     showOverflow = false
@@ -167,12 +185,15 @@ fun NodesScreen(
             OutlinedTextField(
                 value = state.query,
                 onValueChange = viewModel::setQuery,
-                placeholder = { Text("搜索名称或地址") },
+                placeholder = { Text(stringResource(R.string.nodes_search_placeholder)) },
                 leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
                 trailingIcon = if (state.query.isNotEmpty()) {
                     {
                         IconButton(onClick = { viewModel.setQuery("") }) {
-                            Icon(Icons.Default.Close, contentDescription = "清除")
+                            Icon(
+                                Icons.Default.Close,
+                                contentDescription = stringResource(R.string.common_clear),
+                            )
                         }
                     }
                 } else {
@@ -228,7 +249,7 @@ fun NodesScreen(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(
-                    text = "排序",
+                    text = stringResource(R.string.nodes_sort),
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -236,7 +257,7 @@ fun NodesScreen(
                     FilterChip(
                         selected = state.sort == option,
                         onClick = { viewModel.setSort(option) },
-                        label = { Text(option.label) },
+                        label = { Text(stringResource(option.labelRes)) },
                     )
                 }
             }
@@ -245,7 +266,7 @@ fun NodesScreen(
         item {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    text = "${state.visibleServers.size} 个节点",
+                    text = stringResource(R.string.nodes_count, state.visibleServers.size),
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.weight(1f),
@@ -255,7 +276,7 @@ fun NodesScreen(
                     FilterChip(
                         selected = state.testMode == mode,
                         onClick = { viewModel.setTestMode(mode) },
-                        label = { Text(mode.label) },
+                        label = { Text(stringResource(mode.labelRes)) },
                         enabled = !state.isTesting,
                     )
                     Spacer(Modifier.width(6.dp))
@@ -267,7 +288,13 @@ fun NodesScreen(
                             strokeWidth = 2.dp,
                         )
                         Spacer(Modifier.width(8.dp))
-                        Text("${state.testProgress}/${state.testTotal}")
+                        Text(
+                            stringResource(
+                                R.string.nodes_test_progress,
+                                state.testProgress ?: 0,
+                                state.testTotal,
+                            ),
+                        )
                     } else {
                         Icon(
                             Icons.Default.Bolt,
@@ -275,7 +302,7 @@ fun NodesScreen(
                             modifier = Modifier.size(16.dp),
                         )
                         Spacer(Modifier.width(4.dp))
-                        Text("测速")
+                        Text(stringResource(R.string.nodes_test))
                     }
                 }
             }
@@ -284,7 +311,7 @@ fun NodesScreen(
         if (state.testMode == TestMode.REAL && !state.coreRunning) {
             item {
                 Text(
-                    text = "真连接测速需要先启动代理。只想快速筛掉连不上的节点可以用 TCPing。",
+                    text = stringResource(R.string.nodes_real_test_hint),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(horizontal = 4.dp),
@@ -302,7 +329,7 @@ fun NodesScreen(
         if (state.visibleServers.isEmpty()) {
             item {
                 Text(
-                    text = "还没有节点。可以从剪贴板粘贴分享链接，或添加机场订阅。",
+                    text = stringResource(R.string.nodes_empty),
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(vertical = 24.dp, horizontal = 4.dp),
@@ -343,13 +370,14 @@ fun NodesScreen(
                 ) {
                     QrCode(content = target.link, modifier = Modifier.size(240.dp))
                     Text(
-                        text = "用另一台设备的代理客户端扫码即可导入。",
+                        text = stringResource(R.string.nodes_share_hint),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
             },
             confirmButton = {
+                val copied = stringResource(R.string.nodes_share_copied)
                 Button(onClick = {
                     // 分享链接里带着节点密码，Android 13+ 的剪贴板预览浮层
                     // 会把它明文渲染在屏幕上
@@ -358,12 +386,14 @@ fun NodesScreen(
                         text = target.link,
                         sensitive = true,
                     )
-                    banner = "已复制分享链接"
+                    banner = copied
                     viewModel.dismissShare()
-                }) { Text("复制链接") }
+                }) { Text(stringResource(R.string.nodes_share_copy)) }
             },
             dismissButton = {
-                TextButton(onClick = viewModel::dismissShare) { Text("关闭") }
+                TextButton(onClick = viewModel::dismissShare) {
+                    Text(stringResource(R.string.common_close))
+                }
             },
         )
     }
@@ -371,16 +401,18 @@ fun NodesScreen(
     pendingDeleteGroup?.let { group ->
         AlertDialog(
             onDismissRequest = { pendingDeleteGroup = null },
-            title = { Text("删除订阅") },
-            text = { Text("将同时删除「${group.name}」下的所有节点，此操作不可撤销。") },
+            title = { Text(stringResource(R.string.nodes_delete_group_title)) },
+            text = { Text(stringResource(R.string.nodes_delete_group_message, group.name)) },
             confirmButton = {
                 TextButton(onClick = {
                     viewModel.deleteGroup(group.id)
                     pendingDeleteGroup = null
-                }) { Text("删除") }
+                }) { Text(stringResource(R.string.common_delete)) }
             },
             dismissButton = {
-                TextButton(onClick = { pendingDeleteGroup = null }) { Text("取消") }
+                TextButton(onClick = { pendingDeleteGroup = null }) {
+                    Text(stringResource(R.string.common_cancel))
+                }
             },
         )
     }
@@ -390,21 +422,27 @@ fun NodesScreen(
     pendingDeleteNode?.let { node ->
         AlertDialog(
             onDismissRequest = { pendingDeleteNode = null },
-            title = { Text("删除节点") },
+            title = { Text(stringResource(R.string.nodes_delete_node_title)) },
             text = {
                 Text(
-                    "「${node.name}」（${node.server}:${node.serverPort}）将被删除，" +
-                        "此操作不可撤销。",
+                    stringResource(
+                        R.string.nodes_delete_node_message,
+                        node.name,
+                        node.server,
+                        node.serverPort,
+                    ),
                 )
             },
             confirmButton = {
                 TextButton(onClick = {
                     viewModel.deleteNode(node.id)
                     pendingDeleteNode = null
-                }) { Text("删除") }
+                }) { Text(stringResource(R.string.common_delete)) }
             },
             dismissButton = {
-                TextButton(onClick = { pendingDeleteNode = null }) { Text("取消") }
+                TextButton(onClick = { pendingDeleteNode = null }) {
+                    Text(stringResource(R.string.common_cancel))
+                }
             },
         )
     }
@@ -412,8 +450,8 @@ fun NodesScreen(
     pendingBulkDelete?.let { action ->
         AlertDialog(
             onDismissRequest = { pendingBulkDelete = null },
-            title = { Text(action.label) },
-            text = { Text(action.confirmMessage) },
+            title = { Text(stringResource(action.labelRes)) },
+            text = { Text(stringResource(action.confirmMessageRes)) },
             confirmButton = {
                 TextButton(onClick = {
                     when (action) {
@@ -421,26 +459,24 @@ fun NodesScreen(
                         BulkDelete.INVALID -> viewModel.deleteInvalid()
                     }
                     pendingBulkDelete = null
-                }) { Text("删除") }
+                }) { Text(stringResource(R.string.common_delete)) }
             },
             dismissButton = {
-                TextButton(onClick = { pendingBulkDelete = null }) { Text("取消") }
+                TextButton(onClick = { pendingBulkDelete = null }) {
+                    Text(stringResource(R.string.common_cancel))
+                }
             },
         )
     }
 }
 
 /** 一次删掉一批节点的两个入口，都不可撤销，都必须先问一句。 */
-private enum class BulkDelete(val label: String, val confirmMessage: String) {
-    DUPLICATES(
-        label = "删除重复节点",
-        confirmMessage = "地址与端口相同的节点只保留一个。此操作不可撤销。",
-    ),
-    INVALID(
-        label = "删除测速失败的节点",
-        confirmMessage = "上次测速超时或失败的节点会被全部删除。测速结果受当时网络状况影响，" +
-            "换个网络可能就通了。此操作不可撤销。",
-    ),
+private enum class BulkDelete(
+    @StringRes val labelRes: Int,
+    @StringRes val confirmMessageRes: Int,
+) {
+    DUPLICATES(R.string.nodes_bulk_duplicates, R.string.nodes_bulk_duplicates_message),
+    INVALID(R.string.nodes_bulk_invalid, R.string.nodes_bulk_invalid_message),
 }
 
 @Composable
@@ -459,7 +495,7 @@ private fun GroupChips(
         FilterChip(
             selected = selectedGroupId == null,
             onClick = { onSelect(null) },
-            label = { Text("全部 ($totalCount)") },
+            label = { Text(stringResource(R.string.nodes_group_all, totalCount)) },
         )
         groups.forEach { group ->
             FilterChip(
@@ -498,7 +534,11 @@ private fun SubscriptionPanel(
                 Text(group.name, style = MaterialTheme.typography.titleSmall)
                 group.traffic?.let { traffic ->
                     Text(
-                        text = "已用 ${formatBytes(traffic.usedBytes)} / ${formatBytes(traffic.totalBytes)}",
+                        text = stringResource(
+                            R.string.nodes_subscription_traffic,
+                            formatBytes(traffic.usedBytes),
+                            formatBytes(traffic.totalBytes),
+                        ),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -512,17 +552,23 @@ private fun SubscriptionPanel(
                 }
                 group.lastError?.let {
                     Text(
-                        text = "上次更新失败：$it",
+                        text = stringResource(R.string.nodes_subscription_last_error, it),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.error,
                     )
                 }
             }
             IconButton(onClick = onRefresh) {
-                Icon(Icons.Default.Refresh, contentDescription = "更新订阅")
+                Icon(
+                    Icons.Default.Refresh,
+                    contentDescription = stringResource(R.string.nodes_subscription_refresh),
+                )
             }
             IconButton(onClick = onDelete) {
-                Icon(Icons.Default.Delete, contentDescription = "删除订阅")
+                Icon(
+                    Icons.Default.Delete,
+                    contentDescription = stringResource(R.string.nodes_subscription_delete),
+                )
             }
         }
     }
@@ -545,9 +591,12 @@ private fun AutoSelectRow(selected: Boolean, onClick: () -> Unit) {
             )
             Spacer(Modifier.width(12.dp))
             Column(modifier = Modifier.weight(1f)) {
-                Text("自动选择", style = MaterialTheme.typography.titleSmall)
                 Text(
-                    text = "定期测速，始终使用延迟最低的节点",
+                    text = stringResource(R.string.nodes_auto_title),
+                    style = MaterialTheme.typography.titleSmall,
+                )
+                Text(
+                    text = stringResource(R.string.nodes_auto_subtitle),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -555,7 +604,7 @@ private fun AutoSelectRow(selected: Boolean, onClick: () -> Unit) {
             if (selected) {
                 Icon(
                     Icons.Default.Check,
-                    contentDescription = "已选中",
+                    contentDescription = stringResource(R.string.common_selected),
                     tint = MaterialTheme.colorScheme.primary,
                 )
             }
@@ -595,14 +644,18 @@ private fun NodeRow(
                 )
                 if (unreadable) {
                     Text(
-                        text = "凭据无法解密，点击重新导入",
+                        text = stringResource(R.string.nodes_unreadable),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.error,
                         maxLines = 1,
                     )
                 }
                 Text(
-                    text = "${node.server}:${node.serverPort}",
+                    text = stringResource(
+                        R.string.nodes_endpoint,
+                        node.server,
+                        node.serverPort,
+                    ),
                     style = MaterialTheme.typography.bodySmall,
                     fontFamily = FontFamily.Monospace,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -618,16 +671,18 @@ private fun NodeRow(
                     if (selected && !unreadable) {
                         Icon(
                             Icons.Default.Check,
-                            contentDescription = "已选中",
+                            contentDescription = stringResource(R.string.common_selected),
                             tint = MaterialTheme.colorScheme.primary,
                             modifier = Modifier.size(18.dp),
                         )
                         Spacer(Modifier.width(4.dp))
                     }
+                    // 读屏软件在这一列上会连着念好几遍「分享」「编辑」，不带
+                    // 节点名就分不清自己在操作哪一条
                     IconButton(onClick = onShare) {
                         Icon(
                             Icons.Default.Share,
-                            contentDescription = "分享",
+                            contentDescription = "${stringResource(R.string.nodes_share)} ${node.name}",
                             tint = MaterialTheme.colorScheme.primary,
                             modifier = Modifier.size(18.dp),
                         )
@@ -635,7 +690,7 @@ private fun NodeRow(
                     IconButton(onClick = onEdit) {
                         Icon(
                             Icons.Default.Edit,
-                            contentDescription = "编辑",
+                            contentDescription = "${stringResource(R.string.common_edit)} ${node.name}",
                             tint = MaterialTheme.colorScheme.primary,
                             modifier = Modifier.size(18.dp),
                         )
@@ -644,7 +699,8 @@ private fun NodeRow(
                         IconButton(onClick = { menuOpen = true }) {
                             Icon(
                                 Icons.Default.MoreVert,
-                                contentDescription = "更多操作",
+                                contentDescription =
+                                    "${stringResource(R.string.common_more_actions)} ${node.name}",
                                 modifier = Modifier.size(18.dp),
                             )
                         }
@@ -654,7 +710,10 @@ private fun NodeRow(
                         ) {
                             DropdownMenuItem(
                                 text = {
-                                    Text("删除", color = MaterialTheme.colorScheme.error)
+                                    Text(
+                                        stringResource(R.string.common_delete),
+                                        color = MaterialTheme.colorScheme.error,
+                                    )
                                 },
                                 onClick = {
                                     menuOpen = false
@@ -680,7 +739,7 @@ private fun SubscriptionDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("添加订阅") },
+        title = { Text(stringResource(R.string.nodes_subscription_dialog_title)) },
         text = {
             Column(
                 modifier = Modifier.verticalScroll(rememberScrollState()),
@@ -689,7 +748,7 @@ private fun SubscriptionDialog(
                 OutlinedTextField(
                     value = url,
                     onValueChange = { url = it },
-                    label = { Text("订阅地址") },
+                    label = { Text(stringResource(R.string.nodes_subscription_url)) },
                     placeholder = { Text("https://...") },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
@@ -697,36 +756,39 @@ private fun SubscriptionDialog(
                 OutlinedTextField(
                     value = name,
                     onValueChange = { name = it },
-                    label = { Text("名称（可留空）") },
+                    label = { Text(stringResource(R.string.nodes_subscription_name)) },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                 )
                 OutlinedTextField(
                     value = filter,
                     onValueChange = { filter = it },
-                    label = { Text("排除的节点名（正则，可留空）") },
-                    placeholder = { Text("剩余流量|到期|官网|续费") },
+                    label = { Text(stringResource(R.string.nodes_subscription_filter)) },
+                    placeholder = {
+                        Text(stringResource(R.string.nodes_subscription_filter_placeholder))
+                    },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                 )
                 Text(
-                    text = "机场常在订阅里塞「剩余流量」「官网地址」这类伪装成节点的公告，" +
-                        "填个正则可以直接滤掉。",
+                    text = stringResource(R.string.nodes_subscription_filter_hint),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 Text(
-                    text = "支持 Base64 链接列表、Clash YAML、sing-box JSON 与 SIP008。",
+                    text = stringResource(R.string.nodes_subscription_formats),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
         },
         confirmButton = {
-            Button(onClick = { onConfirm(url, name, filter) }) { Text("导入") }
+            Button(onClick = { onConfirm(url, name, filter) }) {
+                Text(stringResource(R.string.nodes_subscription_import))
+            }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) { Text("取消") }
+            TextButton(onClick = onDismiss) { Text(stringResource(R.string.common_cancel)) }
         },
     )
 }

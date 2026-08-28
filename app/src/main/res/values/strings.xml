@@ -23,6 +23,82 @@
     <string name="common_close">关闭</string>
     <string name="common_retry">重试</string>
     <string name="common_save">保存</string>
+    <string name="common_more_actions">更多操作</string>
+    <string name="common_clear">清除</string>
+    <string name="common_selected">已选中</string>
+    <string name="common_edit">编辑</string>
+    <!-- 异常的 message 常常是 null，句子中间不能露出一个字面的 "null" -->
+    <string name="common_unknown_error">未知错误</string>
+
+    <!-- ============================ 节点 ============================ -->
+    <string name="nodes_title">节点</string>
+    <string name="nodes_scan">扫码导入</string>
+    <string name="nodes_import_clipboard">从剪贴板导入</string>
+    <string name="nodes_add_subscription">添加订阅</string>
+    <string name="nodes_add_manual">手动添加</string>
+    <string name="nodes_search_placeholder">搜索名称或地址</string>
+    <string name="nodes_sort">排序</string>
+    <string name="nodes_sort_default">默认</string>
+    <string name="nodes_sort_latency">延迟</string>
+    <string name="nodes_sort_name">名称</string>
+    <!-- TCPing 是既有的协议层名词，各语言下都保持原样 -->
+    <string name="nodes_test_tcping" translatable="false">TCPing</string>
+    <string name="nodes_test_real">真连接</string>
+    <string name="nodes_count">%1$d 个节点</string>
+    <string name="nodes_test">测速</string>
+    <string name="nodes_test_progress">%1$d/%2$d</string>
+    <string name="nodes_real_test_hint">真连接测速需要先启动代理。只想快速筛掉连不上的节点可以用 TCPing。</string>
+    <string name="nodes_empty">还没有节点。可以从剪贴板粘贴分享链接，或添加机场订阅。</string>
+    <string name="nodes_group_all">全部 (%1$d)</string>
+    <string name="nodes_auto_title">自动选择</string>
+    <string name="nodes_auto_subtitle">定期测速，始终使用延迟最低的节点</string>
+    <string name="nodes_unreadable">凭据无法解密，点击重新导入</string>
+    <string name="nodes_endpoint">%1$s:%2$d</string>
+    <string name="nodes_share">分享</string>
+    <string name="nodes_share_hint">用另一台设备的代理客户端扫码即可导入。</string>
+    <string name="nodes_share_copy">复制链接</string>
+    <string name="nodes_share_copied">已复制分享链接</string>
+    <string name="nodes_subscription_refresh">更新订阅</string>
+    <string name="nodes_subscription_delete">删除订阅</string>
+    <string name="nodes_subscription_traffic">已用 %1$s / %2$s</string>
+    <string name="nodes_subscription_last_error">上次更新失败：%1$s</string>
+    <string name="nodes_delete_group_title">删除订阅</string>
+    <string name="nodes_delete_group_message">将同时删除「%1$s」下的所有节点，此操作不可撤销。</string>
+    <string name="nodes_delete_node_title">删除节点</string>
+    <string name="nodes_delete_node_message">「%1$s」（%2$s:%3$d）将被删除，此操作不可撤销。</string>
+    <string name="nodes_bulk_duplicates">删除重复节点</string>
+    <string name="nodes_bulk_duplicates_message">地址与端口相同的节点只保留一个。此操作不可撤销。</string>
+    <string name="nodes_bulk_invalid">删除测速失败的节点</string>
+    <string name="nodes_bulk_invalid_message">上次测速超时或失败的节点会被全部删除。测速结果受当时网络状况影响，换个网络可能就通了。此操作不可撤销。</string>
+    <string name="nodes_subscription_dialog_title">添加订阅</string>
+    <string name="nodes_subscription_url">订阅地址</string>
+    <string name="nodes_subscription_name">名称（可留空）</string>
+    <string name="nodes_subscription_filter">排除的节点名（正则，可留空）</string>
+    <string name="nodes_subscription_filter_placeholder">剩余流量|到期|官网|续费</string>
+    <string name="nodes_subscription_filter_hint">机场常在订阅里塞「剩余流量」「官网地址」这类伪装成节点的公告，填个正则可以直接滤掉。</string>
+    <string name="nodes_subscription_formats">支持 Base64 链接列表、Clash YAML、sing-box JSON 与 SIP008。</string>
+    <string name="nodes_subscription_import">导入</string>
+    <!-- 提示 -->
+    <string name="nodes_switched">已切换，现有连接不受影响</string>
+    <string name="nodes_switch_failed">切换失败：%1$s</string>
+    <string name="nodes_real_test_needs_core">真连接测速需要先启动代理，或改用 TCPing</string>
+    <string name="nodes_test_finished">测速完成</string>
+    <string name="nodes_duplicates_removed">已删除 %1$d 个重复节点</string>
+    <string name="nodes_no_duplicates">没有发现重复节点</string>
+    <string name="nodes_invalid_removed">已删除 %1$d 个测速失败的节点</string>
+    <string name="nodes_no_invalid">没有测速失败的节点。请先测速。</string>
+    <string name="nodes_clipboard_empty">剪贴板为空</string>
+    <string name="nodes_no_links_found">没有识别到可用的节点链接</string>
+    <string name="nodes_imported">已导入 %1$d 个节点</string>
+    <string name="nodes_imported_partial">已导入 %1$d 个，%2$d 个无法识别</string>
+    <string name="nodes_subscription_url_required">请填写订阅地址</string>
+    <string name="nodes_subscribed">「%1$s」已导入 %2$d 个节点</string>
+    <string name="nodes_subscribed_filtered">「%1$s」已导入 %2$d 个节点，过滤掉 %3$d 条</string>
+    <string name="nodes_subscribe_failed">订阅失败：%1$s</string>
+    <string name="nodes_refreshed">已更新 %1$d 个节点</string>
+    <string name="nodes_refresh_failed">更新失败：%1$s</string>
+    <string name="nodes_not_shareable">%1$s 没有通用的分享链接格式</string>
+    <string name="nodes_group_deleted">已删除分组及其节点</string>
 
     <!-- ============================ 导航 ============================ -->
     <string name="nav_home">首页</string>
