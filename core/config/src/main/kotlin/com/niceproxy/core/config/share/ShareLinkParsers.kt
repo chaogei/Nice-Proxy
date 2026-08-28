@@ -50,9 +50,12 @@ object ShareLinkParsers {
                 "vmess" -> parseVMess(trimmed, groupId)
                 "vless" -> parseVLess(trimmed, groupId)
                 "trojan" -> parseTrojan(trimmed, groupId)
+                "hysteria", "hy" -> parseHysteria(trimmed, groupId)
                 "hysteria2", "hy2" -> parseHysteria2(trimmed, groupId)
                 "tuic" -> parseTuic(trimmed, groupId)
                 "anytls" -> parseAnyTls(trimmed, groupId)
+                "wireguard", "wg" -> parseWireGuard(trimmed, groupId)
+                "ssh" -> parseSsh(trimmed, groupId)
                 "socks", "socks5", "socks4", "socks4a" -> parseSocks(trimmed, groupId)
                 "http", "https" -> parseHttp(trimmed, groupId)
                 else -> throw IllegalArgumentException("不支持的协议：$scheme")
@@ -68,7 +71,7 @@ object ShareLinkParsers {
      */
     fun parseMany(text: String, groupId: String = ""): BatchResult {
         val nodes = mutableListOf<ServerProfile>()
-        val failures = mutableListOf<String>()
+        val failures = mutableListOf<ParseFailure>()
         var ignoredInsecure = 0
         text.lineSequence()
             .map { UriSupport.sanitize(it) }
@@ -79,7 +82,7 @@ object ShareLinkParsers {
                         nodes += it.profile
                         if (it.insecureIgnored) ignoredInsecure++
                     },
-                    onFailure = { failures += line.take(60) },
+                    onFailure = { error -> failures += ParseFailure.of(line, error) },
                 )
             }
         return BatchResult(nodes, failures, ignoredInsecure)
@@ -87,10 +90,13 @@ object ShareLinkParsers {
 
     data class BatchResult(
         val nodes: List<ServerProfile>,
-        val failedLines: List<String>,
+        val failures: List<ParseFailure>,
         /** 有多少个节点要求关闭 TLS 证书校验、已被忽略，见 RemoteTlsPolicy。 */
         val ignoredInsecureCount: Int = 0,
-    )
+    ) {
+        /** 每条都带上原因，见 [ParseFailure]。 */
+        val failedLines: List<String> get() = failures.map { it.message }
+    }
 
     // ------------------------------------------------------------ Shadowsocks
 
@@ -327,6 +333,57 @@ object ShareLinkParsers {
         )
     }
 
+    // ------------------------------------------------------------ Hysteria v1
+
+    /**
+     * Hysteria v1 官方链接格式：认证与带宽全在 query 里，没有 userinfo。
+     *
+     * `hysteria://host:port?protocol=udp&auth=xxx&peer=sni&upmbps=100&downmbps=100
+     * &obfs=xplus&obfsParam=yyy&alpn=hysteria#名字`
+     */
+    private fun parseHysteria(link: String, groupId: String): ServerProfile {
+        val uri = UriSupport.parse(link) ?: throw IllegalArgumentException("hysteria 链接结构无法识别")
+
+        // v1 的 protocol 指的是底层承载方式。sing-box 只实现了原生 UDP，
+        // faketcp / wechat-video 导进来会得到一个永远连不上的节点
+        val wireProtocol = uri.q("protocol")?.lowercase()
+        require(wireProtocol == null || wireProtocol == "udp") {
+            "sing-box 不支持 Hysteria v1 的 $wireProtocol 承载方式，只支持 udp"
+        }
+
+        val auth = uri.q("auth", "auth_str", "authstr")
+            ?: UriSupport.decode(uri.userInfo).takeIf { it.isNotBlank() }
+            ?: throw IllegalArgumentException("hysteria 缺少认证串")
+        // v1 没有 BBR 自适应，带宽是握手的一部分，缺了内核直接拒绝整份配置
+        val up = uri.qInt("upmbps", "up_mbps", "up")
+            ?: throw IllegalArgumentException("hysteria 缺少上行带宽（upmbps）")
+        val down = uri.qInt("downmbps", "down_mbps", "down")
+            ?: throw IllegalArgumentException("hysteria 缺少下行带宽（downmbps）")
+
+        return newProfile(
+            groupId = groupId,
+            name = uri.displayName(),
+            protocol = ProxyProtocol.HYSTERIA,
+            server = uri.host,
+            port = uri.port,
+            params = ProtocolParams.Hysteria(
+                authString = auth,
+                upMbps = up,
+                downMbps = down,
+                // 链接里 obfs 是混淆算法名（只有 xplus）、obfsParam 才是密码，
+                // 而 sing-box 的 obfs 字段直接就是密码
+                obfs = uri.q("obfsparam", "obfs-password", "obfs_password") ?: uri.q("obfs"),
+                serverPorts = uri.q("mport", "ports").splitCsv().map { it.replace('-', ':') },
+            ),
+            tls = TlsConfig(
+                enabled = true,
+                serverName = uri.q("peer", "sni"),
+                insecure = uri.qBool("insecure", "allowinsecure", "skip-cert-verify"),
+                alpn = uri.q("alpn").splitCsv(),
+            ),
+        )
+    }
+
     // ------------------------------------------------------------ Hysteria2
 
     private fun parseHysteria2(link: String, groupId: String): ServerProfile {
@@ -405,6 +462,68 @@ object ShareLinkParsers {
                 serverName = uri.q("sni", "peer"),
                 insecure = uri.qBool("insecure", "allowinsecure"),
             ),
+        )
+    }
+
+    // ------------------------------------------------------------ WireGuard
+
+    /**
+     * v2rayNG / NekoBox 那套 `wireguard://` 写法：
+     * `wireguard://<私钥>@host:port?address=10.0.0.2/32&publickey=xxx
+     * &presharedkey=yyy&mtu=1408&reserved=1,2,3#名字`
+     *
+     * 这是目前生态里唯一有共识的 WireGuard 链接格式（Clash 与 sing-box 官方
+     * 都只走配置文件）。
+     */
+    private fun parseWireGuard(link: String, groupId: String): ServerProfile {
+        val uri = UriSupport.parse(link)
+            ?: throw IllegalArgumentException("wireguard 链接结构无法识别")
+        val privateKey = UriSupport.decode(uri.userInfo).ifBlank {
+            uri.q("privatekey", "private-key", "secretkey")
+                ?: throw IllegalArgumentException("wireguard 缺少私钥")
+        }
+        val publicKey = uri.q("publickey", "public-key", "peer_public_key", "pbk")
+            ?: throw IllegalArgumentException("wireguard 缺少对端公钥")
+        val address = uri.q("address", "ip", "local_address", "localaddress").splitCsv()
+        require(address.isNotEmpty()) { "wireguard 缺少本地地址（address）" }
+
+        return newProfile(
+            groupId = groupId,
+            name = uri.displayName(),
+            protocol = ProxyProtocol.WIREGUARD,
+            server = uri.host,
+            port = uri.port,
+            params = ProtocolParams.WireGuard(
+                privateKey = privateKey,
+                peerPublicKey = publicKey,
+                preSharedKey = uri.q("presharedkey", "pre-shared-key", "psk"),
+                localAddress = address.map(::asCidrPrefix),
+                reserved = uri.q("reserved").splitCsv().mapNotNull(String::toIntOrNull),
+                mtu = uri.qInt("mtu"),
+                persistentKeepaliveInterval = uri.qInt(
+                    "keepalive",
+                    "persistent_keepalive",
+                    "persistentkeepalive",
+                ),
+            ),
+        )
+    }
+
+    // ------------------------------------------------------------ SSH
+
+    /** `ssh://user:password@host:22#名字`。私钥没法塞进链接，只能走手动添加。 */
+    private fun parseSsh(link: String, groupId: String): ServerProfile {
+        val uri = UriSupport.parse(link) ?: throw IllegalArgumentException("ssh 链接结构无法识别")
+        val (user, password) = splitCredentials(uri.userInfo)
+        require(!user.isNullOrBlank()) { "ssh 缺少用户名" }
+        require(!password.isNullOrBlank()) { "ssh 链接必须带密码（私钥请用手动添加）" }
+        return newProfile(
+            groupId = groupId,
+            name = uri.displayName(),
+            protocol = ProxyProtocol.SSH,
+            server = uri.host,
+            port = uri.port,
+            params = ProtocolParams.Ssh(user = user, password = password),
         )
     }
 
@@ -490,8 +609,21 @@ object ShareLinkParsers {
 }
 
 /** 逗号分隔的多值字段（alpn、mport 等）。 */
-private fun String?.splitCsv(): List<String> =
+internal fun String?.splitCsv(): List<String> =
     this?.split(',')?.map(String::trim)?.filter(String::isNotEmpty) ?: emptyList()
+
+/**
+ * 补全 WireGuard 地址的掩码位。
+ *
+ * wg-quick 的 `Address = 10.0.0.2` 是合法的，机场与 WARP 生成器也照着这么写；
+ * 而 sing-box 用 `netip.ParsePrefix` 解析，不带掩码就在读配置的第一步失败 ——
+ * 失败的不是这一个节点，是整份配置。单地址补 /32（IPv6 补 /128）语义完全一致。
+ */
+internal fun asCidrPrefix(address: String): String {
+    val trimmed = address.trim().removeSurrounding("[", "]")
+    if (trimmed.contains('/')) return trimmed
+    return if (trimmed.contains(':')) "$trimmed/128" else "$trimmed/32"
+}
 
 /** JSON 里同一个字段可能写成数组也可能写成逗号串，两种都要认。 */
 private fun JsonObject.stringList(key: String): List<String> = when (val value = this[key]) {

@@ -104,8 +104,9 @@ internal object UriSupport {
      * 订阅正文里一条「官网地址」公告就会被当成 HTTP 代理节点导进来。
      */
     private fun defaultPortFor(scheme: String): Int? = when (scheme) {
-        "trojan", "vless", "vmess", "hysteria2", "hy2", "hysteria", "tuic", "anytls" -> 443
+        "trojan", "vless", "vmess", "hysteria2", "hy2", "hysteria", "hy", "tuic", "anytls" -> 443
         "socks", "socks5", "socks4", "socks4a" -> 1080
+        "ssh" -> 22
         else -> null
     }
 
