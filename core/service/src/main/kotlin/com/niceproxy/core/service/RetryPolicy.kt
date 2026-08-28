@@ -42,6 +42,15 @@ internal enum class FailureCause(
     /** 内核起来了又立刻退出。可能是节点抽风，也可能是端口被别人抢走，都会变。 */
     CoreExitedRepeatedly(deterministic = false),
 
+    /**
+     * 用户指定的出站网卡没能绑上。
+     *
+     * 归为暂时性：没插网线、副卡刚开机还没注册上、热点刚开还没起来，等一会儿都会好。
+     * 而它必须是一个**失败**而不是一句日志 —— 绑不上就意味着出站正跑在用户明确不想
+     * 用的那张网上（多半是计费的蜂窝），静默降级是这里最贵的一种错。
+     */
+    OutboundBindFailed(deterministic = false),
+
     /** 兜底。分不清成因时一律按暂时性处理，宁可多试几次也不要把用户锁死。 */
     Unknown(deterministic = false),
 }
